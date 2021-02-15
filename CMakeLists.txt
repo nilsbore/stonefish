@@ -63,9 +63,9 @@ else()
     # Create shared library to be installed system-wide
     add_library(Stonefish SHARED ${SOURCES} ${SOURCES_3RD} ${RESOURCES})
     target_link_libraries(Stonefish ${FREETYPE_LIBRARIES} ${OPENGL_LIBRARIES} ${SDL2_LIBRARIES})
-    if(NOT EMBED_RESOURCES)
-        add_definitions(-DSHADER_DIR_PATH=\"${CMAKE_INSTALL_PREFIX}/share/Stonefish/shaders/\") #Sets shader path for the library
-    endif()
+    #if(NOT EMBED_RESOURCES)
+    #    add_definitions(-DSHADER_DIR_PATH=\"${CMAKE_INSTALL_PREFIX}/share/Stonefish/shaders/\") #Sets shader path for the library
+    #endif()
 
     # Install library in the system
     install(
