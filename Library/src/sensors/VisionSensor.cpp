@@ -26,7 +26,6 @@
 #include "sensors/VisionSensor.h"
 
 #include "core/SimulationApp.h"
-#include "core/Console.h"
 #include "entities/StaticEntity.h"
 #include "entities/SolidEntity.h"
 
@@ -46,7 +45,12 @@ VisionSensor::~VisionSensor()
 {
 }
 
-Transform VisionSensor::getSensorFrame()
+void VisionSensor::setRelativeSensorFrame(const Transform& origin)
+{
+    o2s = origin;
+}
+
+Transform VisionSensor::getSensorFrame() const
 {
     if(attach != nullptr)
     {

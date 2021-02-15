@@ -27,6 +27,7 @@
 #define __Stonefish_ScenarioParser__
 
 #include "StonefishCommon.h"
+#include "core/Console.h"
 #include "tinyxml2.h"
 #include <map>
 
@@ -42,6 +43,7 @@ namespace sf
     class Actuator;
     class Light;
     class Comm;
+    class VelocityField;
     struct Color;
     enum class ColorMap;
   
@@ -61,11 +63,23 @@ namespace sf
          \return success
          */
         virtual bool Parse(std::string filename);
-        
+
+        //! A method saving the log to a text file.
+        /*!
+         \param filename path to the log file
+         \return success
+         */
+        bool SaveLog(std::string filename);
+
+        //! A method returning a copy of the log.
+        std::vector<ConsoleMessage> getLog();
+
         //! A method used to get the pointer to the associated simulation manager.
         SimulationManager* getSimulationManager();
-        
+
     protected:
+        Console log;
+
         //! A method used to pre-process the xml description file after loading.
         /*!
          \param root a pointer to a root node
@@ -104,6 +118,13 @@ namespace sf
          */
         virtual bool ParseLooks(XMLElement* element);
         
+        //! A method used to parse a definition of a velocity field (current, wind).
+        /*!
+         \param element a pointer to the XML node
+         \return a pointer to the new velocity field object
+         */
+        virtual VelocityField* ParseVelocityField(XMLElement* element);
+
         //! A method used to parse a static object description.
         /*!
          \param element a pointer to the XML node
@@ -160,14 +181,6 @@ namespace sf
          */
         virtual bool ParseJoint(XMLElement* element, Robot* robot);
         
-        //! A method used to parse a single robot sensor description.
-        /*!
-         \param element a pointer to the XML node
-         \param robot a pointer to the robot object
-         \return success
-         */
-        virtual bool ParseSensor(XMLElement* element, Robot* robot);
-        
         //! A method used to parse a single robot actuator description.
         /*!
          \param element a pointer to the XML node
@@ -175,6 +188,14 @@ namespace sf
          \return success
          */
         virtual bool ParseActuator(XMLElement* element, Robot* robot);
+        
+        //! A method used to parse a single robot sensor description.
+        /*!
+         \param element a pointer to the XML node
+         \param robot a pointer to the robot object
+         \return success
+         */
+        virtual bool ParseSensor(XMLElement* element, Robot* robot);
         
         //! A method used to parse a description of a sensor attached to single body or world.
         /*!
@@ -184,6 +205,14 @@ namespace sf
          */
         virtual bool ParseSensor(XMLElement* element, Entity* ent = nullptr);
         
+        //! A method used to parse a description of an actuator.
+        /*!
+         \param element a pointer to the XML node
+         \param namePrefix a string added at the beginning of the actuator name
+         \return pointer to actuator
+         */
+        virtual Actuator* ParseActuator(XMLElement* element, const std::string& namePrefix);
+
         //! A method used to parse a description of a sensor.
         /*!
          \param element a pointer to the XML node

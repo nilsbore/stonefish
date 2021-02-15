@@ -20,11 +20,10 @@
 //  Stonefish
 //
 //  Created by Patryk Cieslak on 17/07/19.
-//  Copyright (c) 2019-2020 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2019-2021 Patryk Cieslak. All rights reserved.
 //
 
 #include "core/ScenarioParser.h"
-#include "core/Console.h"
 #include "core/SimulationManager.h"
 #include "core/NED.h"
 #include "core/Robot.h"
@@ -44,6 +43,7 @@
 #include "entities/solids/Compound.h"
 #include "entities/forcefields/Uniform.h"
 #include "entities/forcefields/Jet.h"
+#include "sensors/scalar/Accelerometer.h"
 #include "sensors/scalar/Gyroscope.h"
 #include "sensors/scalar/IMU.h"
 #include "sensors/scalar/DVL.h"
@@ -66,6 +66,7 @@
 #include "actuators/Light.h"
 #include "actuators/Servo.h"
 #include "actuators/Propeller.h"
+#include "actuators/Rudder.h"
 #include "actuators/Thruster.h"
 #include "actuators/VariableBuoyancy.h"
 #include "comms/AcousticModem.h"
@@ -77,9 +78,14 @@
 namespace sf
 {
 
-ScenarioParser::ScenarioParser(SimulationManager* sm) : sm(sm) 
+ScenarioParser::ScenarioParser(SimulationManager* sm) : log(false), sm(sm)
 {
     graphical = SimulationApp::getApp()->hasGraphics();
+}
+
+std::vector<ConsoleMessage> ScenarioParser::getLog()
+{
+    return log.getLines();
 }
 
 SimulationManager* ScenarioParser::getSimulationManager()
@@ -89,12 +95,14 @@ SimulationManager* ScenarioParser::getSimulationManager()
 
 bool ScenarioParser::Parse(std::string filename)
 {
-    cInfo("Loading scenario from: %s", filename.c_str());
+    cInfo("Scenario parser: Loading scenario from '%s'.", filename.c_str());
+    log.Print(MessageType::INFO, "Scenario file: %s", filename.c_str());
     
     //Open file
     if(doc.LoadFile(filename.c_str()) != XML_SUCCESS)
     {
-        cError("Scenario parser: file not found!");
+        cInfo("Scenario parser: File not found!");
+        log.Print(MessageType::ERROR, "File not found!");
         return false;
     }
     
@@ -102,13 +110,13 @@ bool ScenarioParser::Parse(std::string filename)
     XMLNode* root = doc.FirstChildElement("scenario");
     if(root == nullptr)
     {
-        cError("Scenario parser: root node not found!");
+        log.Print(MessageType::ERROR, "Root node not found!");
         return false;
     }
     
     if(!PreProcess(root))
     {
-        cError("Scenario parser: pre-processing failed!");
+        log.Print(MessageType::ERROR, "Pre-processing failed!");
         return false;
     }
 
@@ -120,7 +128,7 @@ bool ScenarioParser::Parse(std::string filename)
         const char* path = nullptr;
         if(element->QueryStringAttribute("file", &path) != XML_SUCCESS)
         {
-            cError("Scenario parser: include not properly defined!");
+            log.Print(MessageType::ERROR, "Include not properly defined!");
             return false;
         }
         
@@ -134,7 +142,7 @@ bool ScenarioParser::Parse(std::string filename)
 			
 			if(value == nullptr || name == nullptr)
 			{
-				cError("Scenario parser: Include file argument not properly defined!");
+			    log.Print(MessageType::ERROR, "Include file argument not properly defined!");
 				return false;
 			}
 
@@ -147,7 +155,7 @@ bool ScenarioParser::Parse(std::string filename)
         XMLDocument includedDoc;
         if(includedDoc.LoadFile(includedPath.c_str()) != XML_SUCCESS)
         {
-            cError("Scenario parser: included file '%s' not found!", includedPath.c_str());
+            log.Print(MessageType::ERROR, "Included file '%s' not found!", includedPath.c_str());
             return false;
         }
         
@@ -156,13 +164,13 @@ bool ScenarioParser::Parse(std::string filename)
         XMLNode* includedRoot = includedDoc.FirstChildElement("scenario");
         if(includedRoot == nullptr)
         {
-            cError("Scenario parser: root node not found in included file '%s'!", includedPath.c_str());
+            log.Print(MessageType::ERROR, "Root node not found in included file '%s'!", includedPath.c_str());
             return false;
         }
         
         if(!PreProcess(includedRoot, args))
         {
-            cError("Scenario parser: pre-processing of included file '%s' failed!", includedPath.c_str());
+            log.Print(MessageType::ERROR, "Pre-processing of included file '%s' failed!", includedPath.c_str());
             return false;
         }
         
@@ -170,7 +178,7 @@ bool ScenarioParser::Parse(std::string filename)
         {
             if(!CopyNode(root, child))
             {
-                cError("Scenario parser: could not copy included xml elements!");
+                log.Print(MessageType::ERROR, "Could not copy included XML elements!");
                 return false;
             }
         }
@@ -181,12 +189,12 @@ bool ScenarioParser::Parse(std::string filename)
     element = root->FirstChildElement("environment");
     if(element == nullptr)
     {
-        cError("Scenario parser: environment settings not defined!");
+        log.Print(MessageType::ERROR, "Environment settings not defined!");
         return false;
     }
     if(!ParseEnvironment(element))
     {
-        cError("Scenario parser: environment settings not properly defined!");
+        log.Print(MessageType::ERROR, "Environment settings not properly defined!");
         return false;
     }
         
@@ -194,12 +202,12 @@ bool ScenarioParser::Parse(std::string filename)
     element = root->FirstChildElement("materials");
     if(element == nullptr)
     {
-        cError("Scenario parser: materials not defined!");
+        log.Print(MessageType::ERROR, "Materials not defined!");
         return false;
     }
     if(!ParseMaterials(element))
     {
-        cError("Scenario parser: materials not properly defined!");
+        log.Print(MessageType::ERROR, "Materials not properly defined!");
         return false;
     }
     
@@ -208,13 +216,13 @@ bool ScenarioParser::Parse(std::string filename)
     {
         element = root->FirstChildElement("looks");
         if(element == nullptr)
-            cWarning("Scenario parser: looks not defined -> using standard look.");
+            log.Print(MessageType::WARNING, "Looks not defined -> using standard look.");
 
         while(element != nullptr)
         {
             if(!ParseLooks(element))
             {
-                cError("Scenario parser: looks not properly defined!");
+                log.Print(MessageType::ERROR, "Looks not properly defined!");
                 return false;
             }
             element = element->NextSiblingElement("looks");
@@ -227,19 +235,19 @@ bool ScenarioParser::Parse(std::string filename)
     {
         if(!ParseStatic(element))
         {
-            cError("Scenario parser: static object not properly defined!");
+            log.Print(MessageType::ERROR, "Static object not properly defined!");
             return false;
         }
         element = element->NextSiblingElement("static");
     }
 
-    //Load animated objects (optional)
+    //Load animated bodys (optional)
     element = root->FirstChildElement("animated");
     while(element != nullptr)
     {
         if(!ParseAnimated(element))
         {
-            cError("Scenario parser: animated object not properly defined!");
+            log.Print(MessageType::ERROR, "Animated object not properly defined!");
             return false;
         }
         element = element->NextSiblingElement("animated");
@@ -251,7 +259,7 @@ bool ScenarioParser::Parse(std::string filename)
     {
         if(!ParseDynamic(element))
         {
-            cError("Scenario parser: dynamic object not properly defined!");
+            log.Print(MessageType::ERROR, "Dynamic object not properly defined!");
             return false;
         }
         element = element->NextSiblingElement("dynamic");
@@ -263,7 +271,7 @@ bool ScenarioParser::Parse(std::string filename)
     {
         if(!ParseRobot(element))
         {
-            cError("Scenario parser: robot not properly defined!");
+            log.Print(MessageType::ERROR, "Robot not properly defined!");
             return false;
         }
         element = element->NextSiblingElement("robot");
@@ -275,7 +283,7 @@ bool ScenarioParser::Parse(std::string filename)
     {
         if(!ParseSensor(element))
         {
-            cError("Scenario parser: sensor not properly defined!");
+            log.Print(MessageType::ERROR, "Sensor not properly defined!");
             return false;
         }
         element = element->NextSiblingElement("sensor");
@@ -288,7 +296,7 @@ bool ScenarioParser::Parse(std::string filename)
         Light* l = ParseLight(element, "");
         if(l == nullptr)
         {
-            cError("Scenario parser: light not properly defined!");
+            log.Print(MessageType::ERROR, "Light not properly defined!");
             return false;
         }
         else
@@ -297,7 +305,7 @@ bool ScenarioParser::Parse(std::string filename)
             XMLElement* item;
             if((item = element->FirstChildElement("world_transform")) == nullptr || !ParseTransform(item, origin))
             {
-                cError("Scenario parser: light not properly defined!");
+                log.Print(MessageType::ERROR, "Light not properly defined!");
                 delete l;
                 return false;
             }
@@ -314,7 +322,7 @@ bool ScenarioParser::Parse(std::string filename)
         Comm* comm = ParseComm(element, "");
         if(comm == nullptr)
         {
-            cError("Scenario parser: communication device not properly defined!");
+            log.Print(MessageType::ERROR, "Communication device not properly defined!");
             return false;
         }
         else
@@ -323,7 +331,7 @@ bool ScenarioParser::Parse(std::string filename)
             XMLElement* item;
             if((item = element->FirstChildElement("world_transform")) == nullptr || !ParseTransform(item, origin))
             {
-                cError("Scenario parser: communication device not properly defined!");
+                log.Print(MessageType::ERROR, "Communication device not properly defined!");
                 delete comm;
                 return false;
             }
@@ -339,13 +347,28 @@ bool ScenarioParser::Parse(std::string filename)
     {
         if(!ParseContact(element))
         {
-            cError("Scenario parser: contact not properly defined!");
+            log.Print(MessageType::ERROR, "Contact not properly defined!");
             return false;
         }
         element = element->NextSiblingElement("contact");
     }
     
+    log.Print(MessageType::INFO, "Parsing finished normally.");
     return true;
+}
+
+bool ScenarioParser::SaveLog(std::string filename)
+{
+    if(log.SaveToFile(filename))
+    {
+        cInfo("Scenario parser: Log saved to file '%s'.", filename.c_str());
+        return true;
+    }    
+    else
+    {
+        cError("Scenario parser: Not possible to save log to file '%s'!", filename.c_str());
+        return false;
+    }
 }
 
 bool ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, std::string>& args)
@@ -384,7 +407,7 @@ bool ScenarioParser::ReplaceArguments(XMLNode* node, const std::map<std::string,
                 }
                 catch(const std::out_of_range& e)
                 {
-                    cError("Scenario parser: argument '%s' does not exist!", argName.c_str());
+                    log.Print(MessageType::ERROR, "Argument '%s' does not exist!", argName.c_str());
                     return false;
                 }
 
@@ -414,28 +437,37 @@ bool ScenarioParser::ParseEnvironment(XMLElement* element)
     //Setup NED home
     XMLElement* ned = element->FirstChildElement("ned");
     if(ned == nullptr) //Obligatory
+    {
+        log.Print(MessageType::ERROR, "NED definition missing!");
         return false;
+    }
     
     Scalar lat, lon;
-    if(ned->QueryAttribute("latitude", &lat) != XML_SUCCESS)
+    if(ned->QueryAttribute("latitude", &lat) != XML_SUCCESS
+       || ned->QueryAttribute("longitude", &lon) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "NED definition incorrect!");
         return false;
-    if(ned->QueryAttribute("longitude", &lon) != XML_SUCCESS)
-        return false;
+    }
     sm->getNED()->Init(lat, lon, Scalar(0));
     
     //Setup ocean
     XMLElement* ocean = element->FirstChildElement("ocean");
     if(ocean != nullptr)
     {
+        log.Print(MessageType::INFO, "Ocean simulation enabled.");
         //Basic setup
         Scalar wavesHeight(0);
         Scalar waterDensity(1000);
         Scalar jerlov(0.2);
 
-        if((item = ocean->FirstChildElement("waves")) != nullptr)
-        {
-            item->QueryAttribute("height", &wavesHeight);
-        }
+        if((item = ocean->FirstChildElement("waves")) != nullptr
+            && item->QueryAttribute("height", &wavesHeight) == XML_SUCCESS
+            && wavesHeight > Scalar(0))
+            log.Print(MessageType::INFO, "Using ocean surface with geometrical waves.");
+        else
+            log.Print(MessageType::INFO, "Using flat ocean surface.");
+        
         if((item = ocean->FirstChildElement("water")) != nullptr)
         {
             item->QueryAttribute("density", &waterDensity);
@@ -450,59 +482,11 @@ bool ScenarioParser::ParseEnvironment(XMLElement* element)
         if((item = ocean->FirstChildElement("current")) != nullptr)
         {
             Ocean* ocn = sm->getOcean();
-            XMLElement* item2;
             do
             {
-                //Get type of current
-                const char* currentType;
-                if(item->QueryStringAttribute("type", &currentType) != XML_SUCCESS)
-                    return false;
-                std::string currentTypeStr(currentType);
-                
-                //Create current
-                if(currentTypeStr == "uniform")
-                {
-                    const char* vel;
-                    Scalar vx,vy,vz;
-            
-                    if((item2 = item->FirstChildElement("velocity")) == nullptr)
-                        return false;
-                    if(item2->QueryStringAttribute("xyz", &vel) != XML_SUCCESS)
-                        return false;
-                    if(sscanf(vel, "%lf %lf %lf", &vx, &vy, &vz) != 3)
-                        return false;
-        
-                    ocn->AddVelocityField(new Uniform(Vector3(vx, vy, vz)));
-                }
-                else if(currentTypeStr == "jet")
-                {
-                    const char* center;
-                    const char* vel;
-                    Scalar cx, cy, cz;
-                    Scalar vx, vy, vz;
-                    Scalar radius;
-                    
-                    if((item2 = item->FirstChildElement("center")) == nullptr)
-                        return false;
-                    if(item2->QueryStringAttribute("xyz", &center) != XML_SUCCESS)
-                        return false;
-                    if(sscanf(center, "%lf %lf %lf", &cx, &cy, &cz) != 3)
-                        return false;
-                    if((item2 = item->FirstChildElement("outlet")) == nullptr)
-                        return false;
-                    if(item2->QueryAttribute("radius", &radius) != XML_SUCCESS)
-                        return false;
-                    if((item2 = item->FirstChildElement("velocity")) == nullptr)
-                        return false;
-                    if(item2->QueryStringAttribute("xyz", &vel) != XML_SUCCESS)
-                        return false;
-                    if(sscanf(vel, "%lf %lf %lf", &vx, &vy, &vz) != 3)
-                        return false;
-                    
-                    Vector3 velocity(vx, vy, vz);
-                    Vector3 dir = velocity.normalized();
-                    ocn->AddVelocityField(new Jet(Vector3(cx, cy, cz), dir, radius, velocity.norm()));
-                }
+                VelocityField* current = ParseVelocityField(item);
+                if(current != nullptr)
+                    ocn->AddVelocityField(current);
             }
             while((item = item->NextSiblingElement("current")) != nullptr);
         }
@@ -516,75 +500,28 @@ bool ScenarioParser::ParseEnvironment(XMLElement* element)
         if((item = atmosphere->FirstChildElement("sun")) != nullptr)
         {
             Scalar az, elev;
-            if(item->QueryAttribute("azimuth", &az) != XML_SUCCESS)
-                return false;
-            if(item->QueryAttribute("elevation", &elev) != XML_SUCCESS)
-                return false;
-            sm->getAtmosphere()->SetupSunPosition(az, elev);
+            if(item->QueryAttribute("azimuth", &az) != XML_SUCCESS
+               || item->QueryAttribute("elevation", &elev) != XML_SUCCESS)
+            {
+                log.Print(MessageType::WARNING, "Sun position definition incorrect - using defualts.");
+            }
+            else
+                sm->getAtmosphere()->SetupSunPosition(az, elev);
         }
 
         //Winds
         if((item = atmosphere->FirstChildElement("wind")) != nullptr)
         {
             Atmosphere* atm = sm->getAtmosphere();
-            XMLElement* item2;
             do
             {
-                //Get type of wind
-                const char* windType;
-                if(item->QueryStringAttribute("type", &windType) != XML_SUCCESS)
-                    return false;
-                std::string windTypeStr(windType);
-                
-                //Create wind
-                if(windTypeStr == "uniform")
-                {
-                    const char* vel;
-                    Scalar vx,vy,vz;
-            
-                    if((item2 = item->FirstChildElement("velocity")) == nullptr)
-                        return false;
-                    if(item2->QueryStringAttribute("xyz", &vel) != XML_SUCCESS)
-                        return false;
-                    if(sscanf(vel, "%lf %lf %lf", &vx, &vy, &vz) != 3)
-                        return false;
-        
-                    atm->AddVelocityField(new Uniform(Vector3(vx, vy, vz)));
-                }
-                else if(windTypeStr == "jet")
-                {
-                    const char* center;
-                    const char* vel;
-                    Scalar cx, cy, cz;
-                    Scalar vx, vy, vz;
-                    Scalar radius;
-                    
-                    if((item2 = item->FirstChildElement("center")) == nullptr)
-                        return false;
-                    if(item2->QueryStringAttribute("xyz", &center) != XML_SUCCESS)
-                        return false;
-                    if(sscanf(center, "%lf %lf %lf", &cx, &cy, &cz) != 3)
-                        return false;
-                    if((item2 = item->FirstChildElement("outlet")) == nullptr)
-                        return false;
-                    if(item2->QueryAttribute("radius", &radius) != XML_SUCCESS)
-                        return false;
-                    if((item2 = item->FirstChildElement("velocity")) == nullptr)
-                        return false;
-                    if(item2->QueryStringAttribute("xyz", &vel) != XML_SUCCESS)
-                        return false;
-                    if(sscanf(vel, "%lf %lf %lf", &vx, &vy, &vz) != 3)
-                        return false;
-                    
-                    Vector3 velocity(vx, vy, vz);
-                    Vector3 dir = velocity.normalized();
-                    atm->AddVelocityField(new Jet(Vector3(cx, cy, cz), dir, radius, velocity.norm()));
-                }
+                VelocityField* wind = ParseVelocityField(item);
+                if(wind != nullptr)
+                    atm->AddVelocityField(wind);
             }
             while((item = item->NextSiblingElement("wind")) != nullptr);
         }
     }
-    
     return true;
 }
 
@@ -594,7 +531,10 @@ bool ScenarioParser::ParseMaterials(XMLElement* element)
     XMLElement* mat = element->FirstChildElement("material");
     
     if(mat == nullptr)
+    {
+        log.Print(MessageType::ERROR, "No material definitions found!");
         return false; //There has to be at least one material defined!
+    }
         
     //Iterate through all materials
     while(mat != nullptr)
@@ -602,19 +542,32 @@ bool ScenarioParser::ParseMaterials(XMLElement* element)
         const char* name = nullptr;
         Scalar density, restitution;
         if(mat->QueryStringAttribute("name", &name) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Material name missing!");
             return false;
+        }
+        std::string materialName(name);
         if(mat->QueryAttribute("density", &density) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Density of material '%s' missing!", materialName.c_str());
             return false;
+        }
         if(mat->QueryAttribute("restitution", &restitution) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Restitution of material '%s' missing!", materialName.c_str());
             return false;
-        sm->getMaterialManager()->CreateMaterial(std::string(name), density, restitution);
+        }
+        sm->getMaterialManager()->CreateMaterial(materialName, density, restitution);
         mat = mat->NextSiblingElement("material");
     }
     
     //Read friction table
     XMLElement* table = element->FirstChildElement("friction_table");
-    
-    if(table != nullptr) //Optional
+    if(table == nullptr) //Optional
+    {
+        log.Print(MessageType::WARNING, "Material friction table not defined - using defaults.");
+    }
+    else
     {
         XMLElement* friction = table->FirstChildElement("friction");
         
@@ -623,19 +576,21 @@ bool ScenarioParser::ParseMaterials(XMLElement* element)
             const char* name1 = nullptr;
             const char* name2 = nullptr;
             Scalar fstatic, fdynamic;
-            if(friction->QueryStringAttribute("material1", &name1) != XML_SUCCESS)
-                return false;
-            if(friction->QueryStringAttribute("material2", &name2) != XML_SUCCESS)
-                return false;
-            if(friction->QueryAttribute("static", &fstatic) != XML_SUCCESS)
-                return false;
-            if(friction->QueryAttribute("dynamic", &fdynamic) != XML_SUCCESS)
-                return false;
-            sm->getMaterialManager()->SetMaterialsInteraction(std::string(name1), std::string(name2), fstatic, fdynamic);
+            if(friction->QueryStringAttribute("material1", &name1) != XML_SUCCESS
+               || friction->QueryStringAttribute("material2", &name2) != XML_SUCCESS
+               || friction->QueryAttribute("static", &fstatic) != XML_SUCCESS
+               || friction->QueryAttribute("dynamic", &fdynamic) != XML_SUCCESS)
+            {
+                log.Print(MessageType::WARNING, "Material friction coefficients not properly defined - using defaults.");
+            }
+            else
+            {
+                if(!sm->getMaterialManager()->SetMaterialsInteraction(std::string(name1), std::string(name2), fstatic, fdynamic))
+                    log.Print(MessageType::WARNING, "Setting friction coefficients failed - using defaults.");
+            }
             friction = friction->NextSiblingElement("friction");
         }
     }
-    
     return true;
 }
         
@@ -645,7 +600,10 @@ bool ScenarioParser::ParseLooks(XMLElement* element)
     XMLElement* look = element->FirstChildElement("look");
     
     if(look == nullptr)
+    {
+        log.Print(MessageType::ERROR, "No look definitions found!");
         return false; //There has to be at least one look defined!
+    }
     
     //Iterate through all looks
     while(look != nullptr)
@@ -661,11 +619,22 @@ bool ScenarioParser::ParseLooks(XMLElement* element)
         std::string normalMapStr = "";
         
         if(look->QueryStringAttribute("name", &name) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Look name missing!");
             return false;
+        }
+        std::string lookName(name);
+
         if(!ParseColor(look, color))
+        {
+            log.Print(MessageType::ERROR, "Color of look '%s' missing!", lookName.c_str());
             return false;    
+        }
         if(look->QueryAttribute("roughness", &roughness) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Roughness of look '%s' missing!", lookName.c_str());
             return false;
+        }
         if(look->QueryAttribute("metalness", &metalness) != XML_SUCCESS)
             metalness = Scalar(0);
         if(look->QueryAttribute("reflectivity", &reflectivity) != XML_SUCCESS)
@@ -675,11 +644,76 @@ bool ScenarioParser::ParseLooks(XMLElement* element)
         if(look->QueryStringAttribute("normal_map", &normalMap) == XML_SUCCESS)
             normalMapStr = GetFullPath(std::string(normalMap));
         
-        sm->CreateLook(name, color, roughness, metalness, reflectivity, textureStr, normalMapStr);
+        sm->CreateLook(lookName, color, roughness, metalness, reflectivity, textureStr, normalMapStr);
         look = look->NextSiblingElement("look");
     }
     
     return true;
+}
+
+VelocityField* ScenarioParser::ParseVelocityField(XMLElement* element)
+{
+    //Get type of current
+    const char* vfType;
+    if(element->QueryStringAttribute("type", &vfType) != XML_SUCCESS)
+    {
+        log.Print(MessageType::WARNING, "Velocity field type missing - skipping.");
+        return nullptr;
+    }
+    std::string vfTypeStr(vfType);
+
+    if(vfTypeStr == "uniform")
+    {
+        XMLElement* item;
+        const char* vel;
+        Vector3 v;
+            
+        if((item = element->FirstChildElement("velocity")) == nullptr
+            || item->QueryStringAttribute("xyz", &vel) != XML_SUCCESS
+            || !ParseVector(vel, v))
+        {
+            log.Print(MessageType::WARNING, "Velocity definition of uniform velocity field missing - skipping.");
+            return nullptr;        
+        }
+        return new Uniform(v);
+    }
+    else if(vfTypeStr == "jet")
+    {
+        XMLElement* item;
+        const char* center;
+        const char* vel;
+        Vector3 c;
+        Vector3 v;
+        Scalar radius;
+                   
+        if((item = element->FirstChildElement("center")) == nullptr
+            || item->QueryStringAttribute("xyz", &center) != XML_SUCCESS
+            || !ParseVector(center, c))
+        {
+            log.Print(MessageType::WARNING, "Center definition of jet velocity field missing - skipping.");
+            return nullptr;
+        }
+        if((item = element->FirstChildElement("outlet")) == nullptr
+            || item->QueryAttribute("radius", &radius) != XML_SUCCESS)
+        {
+            log.Print(MessageType::WARNING, "Outlet radius definition of jet velocity field missing - skipping.");
+            return nullptr;               
+        }
+        if((item = element->FirstChildElement("velocity")) == nullptr
+            || item->QueryStringAttribute("xyz", &vel) != XML_SUCCESS
+            || !ParseVector(vel, v))
+        {
+            log.Print(MessageType::WARNING, "Velocity definition of jet velocity field missing - skipping.");
+            return nullptr;
+        }
+        Vector3 dir = v.normalized();
+        return new Jet(c, dir, radius, v.norm());
+    }
+    else
+    {
+        log.Print(MessageType::WARNING, "Velocity field type not supported - skipping.");
+        return nullptr;
+    }
 }
 
 bool ScenarioParser::ParseStatic(XMLElement* element)
@@ -688,9 +722,16 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
     const char* name = nullptr;
     const char* type = nullptr;
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Name of static body missing!");
         return false;
+    }
+    std::string objectName(name);
     if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of static body '%s' missing!", objectName.c_str());
         return false;
+    }
     std::string typestr(type);
         
     //---- Common ----
@@ -702,20 +743,30 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
     Transform trans;
     
     //Material
-    if((item = element->FirstChildElement("material")) == nullptr)
+    if((item = element->FirstChildElement("material")) == nullptr
+        || item->QueryStringAttribute("name", &mat) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Material of static body '%s' not properly defined!", objectName.c_str());
         return false;
-    if(item->QueryStringAttribute("name", &mat) != XML_SUCCESS)
-        return false;
+    }
     //Look
-    if((item = element->FirstChildElement("look")) == nullptr)
+    if((item = element->FirstChildElement("look")) == nullptr
+       || item->QueryStringAttribute("name", &look) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Look of static body '%s' not properly defined!", objectName.c_str());
         return false;
-    if(item->QueryStringAttribute("name", &look) != XML_SUCCESS)
-        return false;
-    item->QueryAttribute("uv_mode", &uvMode); //Optional
-    item->QueryAttribute("uv_scale", &uvScale); //Optional
+    }
+    else
+    {
+        item->QueryAttribute("uv_mode", &uvMode); //Optional
+        item->QueryAttribute("uv_scale", &uvScale); //Optional
+    }
     //Transform
     if((item = element->FirstChildElement("world_transform")) == nullptr || !ParseTransform(item, trans))
+    {
+        log.Print(MessageType::ERROR, "Initial pose of static body '%s', in the world frame, missing!", objectName.c_str());
         return false;
+    }
   
     //---- Object specific ----
     StaticEntity* object;
@@ -723,40 +774,38 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
     if(typestr == "box")
     {
         const char* dims = nullptr;
-        Scalar dimX, dimY, dimZ;
-            
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
+        Vector3 dim;
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+           || item->QueryStringAttribute("xyz", &dims) != XML_SUCCESS
+           || !ParseVector(dims, dim))
+        {
+            log.Print(MessageType::ERROR, "Dimensions of static body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("xyz", &dims) != XML_SUCCESS)
-            return false;
-        if(sscanf(dims, "%lf %lf %lf", &dimX, &dimY, &dimZ) != 3)
-            return false;
-            
-        object = new Obstacle(std::string(name), Vector3(dimX, dimY, dimZ), std::string(mat), std::string(look), uvMode);
+        }
+        object = new Obstacle(objectName, dim, std::string(mat), std::string(look), uvMode);
     }
     else if(typestr == "cylinder")
     {
         Scalar radius, height;
-            
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+            || item->QueryAttribute("radius", &radius) != XML_SUCCESS
+            || item->QueryAttribute("height", &height) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Dimensions of static body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-            return false;
-        if(item->QueryAttribute("height", &height) != XML_SUCCESS)
-            return false;
-                
-        object = new Obstacle(std::string(name), radius, height, std::string(mat), std::string(look));
+        }       
+        object = new Obstacle(objectName, radius, height, std::string(mat), std::string(look));
     }
     else if(typestr == "sphere")
     {
         Scalar radius;
-            
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+            || item->QueryAttribute("radius", &radius) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Dimensions of static body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-            return false;
-            
-        object = new Obstacle(std::string(name), radius, std::string(mat), std::string(look));
+        }   
+        object = new Obstacle(objectName, radius, std::string(mat), std::string(look));
     }
     else if(typestr == "model")
     {
@@ -765,15 +814,23 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
         Transform phyOrigin;
         
         if((item = element->FirstChildElement("physical")) == nullptr)
+        {
+            log.Print(MessageType::ERROR, "Physical mesh of static body '%s' not defined!", objectName.c_str());
             return false;
-        if((item = item->FirstChildElement("mesh")) == nullptr)
+        }
+        if((item = item->FirstChildElement("mesh")) == nullptr
+            || item->QueryStringAttribute("filename", &phyMesh) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Physical mesh of static body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("filename", &phyMesh) != XML_SUCCESS)
-            return false;
+        }
         if(item->QueryAttribute("scale", &phyScale) != XML_SUCCESS)
             phyScale = Scalar(1);
         if((item = item->NextSiblingElement("origin")) == nullptr || !ParseTransform(item, phyOrigin))
+        {
+            log.Print(MessageType::ERROR, "Physical mesh of static body '%s' not properly defined!", objectName.c_str());
             return false;
+        }
         
         if((item = element->FirstChildElement("visual")) != nullptr)
         {
@@ -781,48 +838,56 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
             Scalar graScale;
             Transform graOrigin;
             
-            if((item = item->FirstChildElement("mesh")) == nullptr)
+            if((item = item->FirstChildElement("mesh")) == nullptr
+               || item->QueryStringAttribute("filename", &graMesh) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Visual mesh of static body '%s' not properly defined!", objectName.c_str());
                 return false;
-            if(item->QueryStringAttribute("filename", &graMesh) != XML_SUCCESS)
-                return false;
+            }
             if(item->QueryAttribute("scale", &graScale) != XML_SUCCESS)
                 graScale = Scalar(1);
             if((item = item->NextSiblingElement("origin")) == nullptr || !ParseTransform(item, graOrigin))
+            {
+                log.Print(MessageType::ERROR, "Visual mesh of static body '%s' not properly defined!", objectName.c_str());
                 return false;
-          
-            object = new Obstacle(std::string(name), GetFullPath(std::string(graMesh)), graScale, graOrigin, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look));
+            }
+            object = new Obstacle(objectName, GetFullPath(std::string(graMesh)), graScale, graOrigin, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look));
         }
         else
         {
-            object = new Obstacle(std::string(name), GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look));
+            object = new Obstacle(objectName, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look));
         }
     }
     else if(typestr == "plane")
     {
-        object = new Plane(std::string(name), Scalar(10000), std::string(mat), std::string(look), uvScale);
+        object = new Plane(objectName, Scalar(10000), std::string(mat), std::string(look), uvScale);
     } 
     else if(typestr == "terrain")
     {
         const char* heightmap = nullptr;
         Scalar scaleX, scaleY, height;
             
-        if((item = element->FirstChildElement("height_map")) == nullptr)
+        if((item = element->FirstChildElement("height_map")) == nullptr
+           || item->QueryStringAttribute("filename", &heightmap) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Heightmap of terrain '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("filename", &heightmap) != XML_SUCCESS)
+        }
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+            || item->QueryAttribute("scalex", &scaleX) != XML_SUCCESS
+            || item->QueryAttribute("scaley", &scaleY) != XML_SUCCESS
+            || item->QueryAttribute("height", &height) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Dimensions of terrain '%s' not properly defined!", objectName.c_str());
             return false;
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
-            return false;
-        if(item->QueryAttribute("scalex", &scaleX) != XML_SUCCESS)
-            return false;
-        if(item->QueryAttribute("scaley", &scaleY) != XML_SUCCESS)
-            return false;
-        if(item->QueryAttribute("height", &height) != XML_SUCCESS)
-            return false;
-            
-        object = new Terrain(std::string(name), GetFullPath(std::string(heightmap)), scaleX, scaleY, height, std::string(mat), std::string(look), uvScale);
+        }   
+        object = new Terrain(objectName, GetFullPath(std::string(heightmap)), scaleX, scaleY, height, std::string(mat), std::string(look), uvScale);
     }
     else
+    {
+        log.Print(MessageType::ERROR, "Unknown type of static body '%s'!", objectName.c_str());
         return false;
+    }
 
     //---- Vision sensors ----
     item = element->FirstChildElement("sensor");
@@ -830,7 +895,7 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
     {
         if(!ParseSensor(item, (Entity*)object))
         {
-            cError("Scenario parser: sensor of static body '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Sensor of static body '%s' not properly defined!", objectName.c_str());
             delete object;
             return false;
         }
@@ -844,7 +909,7 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
         Light* l = ParseLight(item, object->getName());
         if(l == nullptr)
         {
-            cError("Scenario parser: light of static body '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Light of static body '%s' not properly defined!", objectName.c_str());
             delete object;
             return false;
         }
@@ -854,7 +919,7 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
             XMLElement* item2;
             if( (item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin) )
             {
-                cError("Scenario parser: light of static body '%s' not properly defined!", name);
+                log.Print(MessageType::ERROR, "Light of static body '%s' not properly defined!", objectName.c_str());
                 delete l;
                 delete object;
                 return false;
@@ -872,7 +937,7 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
         Comm* comm = ParseComm(item, object->getName());
         if(comm == nullptr)
         {
-            cError("Scenario parser: communication device of static body '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Communication device of static body '%s' not properly defined!", objectName.c_str());
             delete object;
             return false;
         }
@@ -882,7 +947,7 @@ bool ScenarioParser::ParseStatic(XMLElement* element)
             XMLElement* item2;
             if( (item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin) )
             {
-                cError("Scenario parser: communication device of static body '%s' not properly defined!", name);
+                log.Print(MessageType::ERROR, "Communication device of static body '%s' not properly defined!", objectName.c_str());
                 delete comm;
                 delete object;
                 return false;
@@ -906,12 +971,21 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
     const char* type = nullptr;
     bool collides = false;
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Name of animated body missing!");
         return false;
+    }
+    std::string objectName(name);
+
     if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of animated body '%s' missing!", objectName.c_str());
         return false;
-    element->QueryAttribute("collisions", &collides); //Optional
+    }
     std::string typestr(type);
-        
+    
+    element->QueryAttribute("collisions", &collides); //Optional
+    
     //---- Common ----
     XMLElement* item;
     const char* mat = nullptr;
@@ -923,17 +997,24 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
     if(typestr != "empty")
     {
         //Material
-        if((item = element->FirstChildElement("material")) == nullptr)
+        if((item = element->FirstChildElement("material")) == nullptr
+           || item->QueryStringAttribute("name", &mat) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Material definition for animated body '%s' missing!", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("name", &mat) != XML_SUCCESS)
-            return false;
+        }
         //Look
-        if((item = element->FirstChildElement("look")) == nullptr)
+        if((item = element->FirstChildElement("look")) == nullptr
+            || item->QueryStringAttribute("name", &look) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Look definition for animated body '%s' missing", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("name", &look) != XML_SUCCESS)
-            return false;
-        item->QueryAttribute("uv_mode", &uvMode); //Optional
-        item->QueryAttribute("uv_scale", &uvScale); //Optional
+        }
+        else
+        {
+            item->QueryAttribute("uv_mode", &uvMode); //Optional
+            item->QueryAttribute("uv_scale", &uvScale); //Optional
+        }
     }
         
     //---- Trajectory ----
@@ -943,7 +1024,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         const char* trType = nullptr;
         if(item->QueryStringAttribute("type", &trType) != XML_SUCCESS)
         {
-            cError("Scenario parser: trajectory type not defined!");
+            log.Print(MessageType::ERROR, "Trajectory type not defined for animated body '%s'!", objectName.c_str());
             return false;
         }
         std::string trTypeStr(trType);
@@ -951,7 +1032,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         const char* playMode = nullptr;
         if(item->QueryStringAttribute("playback", &playMode) != XML_SUCCESS && trTypeStr != "manual")
         {
-            cError("Scenario parser: trajectory playback mode not defined!");
+            log.Print(MessageType::ERROR, "Trajectory playback mode not defined for animated body '%s'!", objectName.c_str());
             return false;
         }
         
@@ -965,7 +1046,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
             pm = PlaybackMode::BOOMERANG;
         else
         {
-            cError("Scenario parser: incorrect trajectory playback mode!");
+            log.Print(MessageType::ERROR, "Incorrect trajectory playback mode for animated body '%s'!", objectName.c_str());
             return false;
         }
         
@@ -993,7 +1074,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
                 Scalar t;
                 if(key->QueryAttribute("time", &t) != XML_SUCCESS || !ParseTransform(key, T))
                 {
-                    cError("Scenario parser: trajectory keypoint not properly defined!");
+                    log.Print(MessageType::ERROR, "Trajectory keypoint not properly defined for animated body '%s'!", objectName.c_str());
                     delete tr;
                     return false;
                 }
@@ -1003,13 +1084,13 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         }
         else
         {
-            cError("Scenario parser: unknown trajectory type!");
+            log.Print(MessageType::ERROR, "Unknown trajectory type for animated body '%s'!", objectName.c_str());
             return false;        
         }
     }
     else
     {
-        cError("Scenario parser: no trajectory defined for animated object!");
+        log.Print(MessageType::ERROR, "No trajectory defined for animated body '%s'!", objectName.c_str());
         return false;
     }
 
@@ -1018,24 +1099,27 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         
     if(typestr == "empty")
     {
-        object = new AnimatedEntity(std::string(name), tr);
+        object = new AnimatedEntity(objectName, tr);
     }
     else if(typestr == "box")
     {
         const char* dims = nullptr;
-        Scalar dimX, dimY, dimZ;
+        Vector3 dim;
         Transform origin;
 
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+           || item->QueryStringAttribute("xyz", &dims) != XML_SUCCESS
+           || !ParseVector(dims, dim))
+        {
+            log.Print(MessageType::ERROR, "Dimensions of animated body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("xyz", &dims) != XML_SUCCESS)
-            return false;
-        if(sscanf(dims, "%lf %lf %lf", &dimX, &dimY, &dimZ) != 3)
-            return false;
+        }
         if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
+        {
+            log.Print(MessageType::ERROR, "Origin frame of animated body '%s' not properly defined!", objectName.c_str());
             return false;        
-
-        object = new AnimatedEntity(std::string(name), tr, Vector3(dimX, dimY, dimZ), origin, std::string(mat), std::string(look), collides);
+        }
+        object = new AnimatedEntity(objectName, tr, dim, origin, std::string(mat), std::string(look), collides);
     }
     else if(typestr == "cylinder")
     {
@@ -1043,30 +1127,37 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         Scalar height;
         Transform origin;
             
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+            || item->QueryAttribute("radius", &radius) != XML_SUCCESS
+            || item->QueryAttribute("height", &height) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Dimensions of animated body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-            return false;
-        if(item->QueryAttribute("height", &height) != XML_SUCCESS)
-            return false;
+        }
         if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
+        {
+            log.Print(MessageType::ERROR, "Origin frame of animated body '%s' not properly defined!", objectName.c_str());
             return false;
-            
-        object = new AnimatedEntity(std::string(name), tr, radius, height, origin, std::string(mat), std::string(look), collides);
+        }            
+        object = new AnimatedEntity(objectName, tr, radius, height, origin, std::string(mat), std::string(look), collides);
     }
     else if(typestr == "sphere")
     {
         Scalar radius;
         Transform origin;
             
-        if((item = element->FirstChildElement("dimensions")) == nullptr)
+        if((item = element->FirstChildElement("dimensions")) == nullptr
+            || item->QueryAttribute("radius", &radius) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Dimensions of animated body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-            return false;
+        }
         if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
+        {
+            log.Print(MessageType::ERROR, "Origin frame of animated body '%s' not properly defined!", objectName.c_str());
             return false;
-            
-        object = new AnimatedEntity(std::string(name), tr, radius, origin, std::string(mat), std::string(look), collides);
+        }
+        object = new AnimatedEntity(objectName, tr, radius, origin, std::string(mat), std::string(look), collides);
     }
     else if(typestr == "model")
     {
@@ -1075,15 +1166,23 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         Transform phyOrigin;
         
         if((item = element->FirstChildElement("physical")) == nullptr)
+        {
+            log.Print(MessageType::ERROR, "Physical mesh of animated body '%s' not defined!", objectName.c_str());
             return false;
-        if((item = item->FirstChildElement("mesh")) == nullptr)
+        }
+        if((item = item->FirstChildElement("mesh")) == nullptr
+            || item->QueryStringAttribute("filename", &phyMesh) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Physical mesh of animated body '%s' not properly defined!", objectName.c_str());
             return false;
-        if(item->QueryStringAttribute("filename", &phyMesh) != XML_SUCCESS)
-            return false;
+        }
         if(item->QueryAttribute("scale", &phyScale) != XML_SUCCESS)
             phyScale = Scalar(1);
         if((item = item->NextSiblingElement("origin")) == nullptr || !ParseTransform(item, phyOrigin))
+        {
+            log.Print(MessageType::ERROR, "Physical mesh of animated body '%s' not properly defined!", objectName.c_str());
             return false;
+        }
         
         if((item = element->FirstChildElement("visual")) != nullptr)
         {
@@ -1091,25 +1190,29 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
             Scalar graScale;
             Transform graOrigin;
             
-            if((item = item->FirstChildElement("mesh")) == nullptr)
+            if((item = item->FirstChildElement("mesh")) == nullptr
+               || item->QueryStringAttribute("filename", &graMesh) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Visual mesh of animated body '%s' not properly defined!", objectName.c_str());
                 return false;
-            if(item->QueryStringAttribute("filename", &graMesh) != XML_SUCCESS)
-                return false;
+            }
             if(item->QueryAttribute("scale", &graScale) != XML_SUCCESS)
                 graScale = Scalar(1);
             if((item = item->NextSiblingElement("origin")) == nullptr || !ParseTransform(item, graOrigin))
+            {
+                log.Print(MessageType::ERROR, "Visual mesh of animated body '%s' not properly defined!", objectName.c_str());
                 return false;
-          
-            object = new AnimatedEntity(std::string(name), tr, GetFullPath(std::string(graMesh)), graScale, graOrigin, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look), collides);
+            }
+            object = new AnimatedEntity(objectName, tr, GetFullPath(std::string(graMesh)), graScale, graOrigin, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look), collides);
         }
         else
         {
-            object = new AnimatedEntity(std::string(name), tr, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look), collides);
+            object = new AnimatedEntity(objectName, tr, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), std::string(look), collides);
         }
     }
     else
     {
-        cError("Scenario parser: incorrect animated object type!");
+        log.Print(MessageType::ERROR, "Incorrect animated body type!");
         delete tr;
         return false;
     }
@@ -1120,7 +1223,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
     {
         if(!ParseSensor(item, (Entity*)object))
         {
-            cError("Scenario parser: sensor of animated body '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Sensor of animated body '%s' not properly defined!", objectName.c_str());
             delete object;
             return false;
         }
@@ -1134,7 +1237,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         Light* l = ParseLight(item, object->getName());
         if(l == nullptr)
         {
-            cError("Scenario parser: light of animated body '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Light of animated body '%s' not properly defined!", objectName.c_str());
             delete object;
             return false;
         }
@@ -1144,7 +1247,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
             XMLElement* item2;
             if( (item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin) )
             {
-                cError("Scenario parser: light of animated body '%s' not properly defined!", name);
+                log.Print(MessageType::ERROR, "Light of animated body '%s' not properly defined!", objectName.c_str());
                 delete l;
                 delete object;
                 return false;
@@ -1162,7 +1265,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
         Comm* comm = ParseComm(item, object->getName());
         if(comm == nullptr)
         {
-            cError("Scenario parser: communication device of animated body '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Communication device of animated body '%s' not properly defined!", objectName.c_str());
             delete object;
             return false;
         }
@@ -1172,7 +1275,7 @@ bool ScenarioParser::ParseAnimated(XMLElement* element)
             XMLElement* item2;
             if( (item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin) )
             {
-                cError("Scenario parser: communication device of animated body '%s' not properly defined!", name);
+                log.Print(MessageType::ERROR, "Communication device of animated body '%s' not properly defined!", objectName.c_str());
                 delete comm;
                 delete object;
                 return false;
@@ -1200,6 +1303,7 @@ bool ScenarioParser::ParseDynamic(XMLElement* element)
     Transform trans;
     if((item = element->FirstChildElement("world_transform")) == nullptr || !ParseTransform(item, trans))
     {
+        log.Print(MessageType::ERROR, "Initial pose of dynamic object '%s', in the world frame, missing!", solid->getName().c_str());
         delete solid;
         return false;
     }
@@ -1210,7 +1314,7 @@ bool ScenarioParser::ParseDynamic(XMLElement* element)
     {
         if(!ParseSensor(item, (Entity*)solid))
         {
-            cError("Scenario parser: sensor of dynamic body '%s' not properly defined!", solid->getName().c_str());
+            log.Print(MessageType::ERROR, "Sensor of dynamic body '%s' not properly defined!", solid->getName().c_str());
             delete solid;
             return false;
         }
@@ -1224,7 +1328,7 @@ bool ScenarioParser::ParseDynamic(XMLElement* element)
         Light* l = ParseLight(item, solid->getName());
         if(l == nullptr)
         {
-            cError("Scenario parser: light of dynamic body '%s' not properly defined!", solid->getName().c_str());
+            log.Print(MessageType::ERROR, "Light of dynamic body '%s' not properly defined!", solid->getName().c_str());
             delete solid;
             return false;
         }
@@ -1234,7 +1338,7 @@ bool ScenarioParser::ParseDynamic(XMLElement* element)
             XMLElement* item2;
             if( (item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin) )
             {
-                cError("Scenario parser: light of dynamic body '%s' not properly defined!", solid->getName().c_str());
+                log.Print(MessageType::ERROR, "Lght of dynamic body '%s' not properly defined!", solid->getName().c_str());
                 delete l;
                 delete solid;
                 return false;
@@ -1252,7 +1356,7 @@ bool ScenarioParser::ParseDynamic(XMLElement* element)
         Comm* comm = ParseComm(item, solid->getName());
         if(comm == nullptr)
         {
-            cError("Scenario parser: communication device of dynamic body '%s' not properly defined!", solid->getName().c_str());
+            log.Print(MessageType::ERROR, "Communication device of dynamic body '%s' not properly defined!", solid->getName().c_str());
             delete solid;
             return false;
         }
@@ -1262,7 +1366,7 @@ bool ScenarioParser::ParseDynamic(XMLElement* element)
             XMLElement* item2;
             if( (item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin) )
             {
-                cError("Scenario parser: communication device of dynamic body '%s' not properly defined!", solid->getName().c_str());
+                log.Print(MessageType::ERROR, "Communication device of dynamic body '%s' not properly defined!", solid->getName().c_str());
                 delete comm;
                 delete solid;
                 return false;
@@ -1289,9 +1393,17 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
     BodyPhysicsType ePhyType;
     
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Rigid body name missing!");
         return false;
+    }
+    std::string solidName = ns != "" ? ns + "/" + std::string(name) : std::string(name);
+
     if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of rigid body '%s' missing!", solidName.c_str());
         return false;
+    }
     if(element->QueryStringAttribute("physics", &phyType) != XML_SUCCESS)
     {
         ePhyType = BodyPhysicsType::SUBMERGED;
@@ -1308,13 +1420,16 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
         else if(phyTypeStr == "aerodynamic")
             ePhyType = BodyPhysicsType::AERODYNAMIC;
         else 
+        {
+            log.Print(MessageType::ERROR, "Incorrect physics type for rigid body '%s'!", solidName.c_str());
             return false;
+        }
     }
     if(element->QueryAttribute("buoyant", &buoyant) != XML_SUCCESS)
         buoyant = true;
     
     std::string typeStr(type);
-    std::string solidName = ns != "" ? ns + "/" + std::string(name) : std::string(name);
+    
     XMLElement* item;
 
     if(typeStr == "compound")
@@ -1324,13 +1439,18 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
         Compound* comp = nullptr;
         Transform partOrigin;
       
-        if((item = element->FirstChildElement("external_part")) == nullptr)
+        if((item = element->FirstChildElement("external_part")) == nullptr
+            || !ParseSolid(item, part, solidName, true))
+        {
+            log.Print(MessageType::ERROR, "No properly defined external part of compound rigid body '%s' found!", solidName.c_str());
             return false;
-        if(!ParseSolid(item, part, solidName, true))
-            return false;
+        }
         XMLElement* item2;
         if((item2 = item->FirstChildElement("compound_transform")) == nullptr || !ParseTransform(item2, partOrigin))
+        {
+            log.Print(MessageType::ERROR, "Incorrect definition of external part's '%s' origin frame, for rigid body '%s'!", part->getName().c_str(), solidName.c_str());
             return false;
+        }
         comp = new Compound(solidName, part, partOrigin, ePhyType);
         
         //Iterate through all external parts
@@ -1339,11 +1459,13 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
         {
             if(!ParseSolid(item, part, solidName, true))
             {
+                log.Print(MessageType::ERROR, "Incorrect definition of external part of rigid body '%s'!", solidName.c_str());
                 delete comp;
                 return false;
             }
             if((item2 = item->FirstChildElement("compound_transform")) == nullptr || !ParseTransform(item2, partOrigin))
             {
+                log.Print(MessageType::ERROR, "Incorrect definition of external part's '%s' origin frame, for rigid body '%s'!", part->getName().c_str(), solidName.c_str());
                 delete part;
                 delete comp;
                 return false;
@@ -1359,11 +1481,13 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
         {
             if(!ParseSolid(item, part, solidName, true))
             {
+                log.Print(MessageType::ERROR, "Incorrect definition of internal part of rigid body '%s'!", solidName.c_str());
                 delete comp;
                 return false;
             }
             if((item2 = item->FirstChildElement("compound_transform")) == nullptr || !ParseTransform(item2, partOrigin))
             {
+                log.Print(MessageType::ERROR, "Incorrect definition of internal part's '%s' origin frame, for rigid body '%s'!", part->getName().c_str(), solidName.c_str());
                 delete part;
                 delete comp;
                 return false;
@@ -1389,15 +1513,19 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
         bool cgok;
         
         //Material
-        if((item = element->FirstChildElement("material")) == nullptr)
+        if((item = element->FirstChildElement("material")) == nullptr
+            || item->QueryStringAttribute("name", &mat) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Material of rigid body '%s' not properly defined!", solidName.c_str());
             return false;
-        if(item->QueryStringAttribute("name", &mat) != XML_SUCCESS)
-            return false;
+        }
         //Look
-        if((item = element->FirstChildElement("look")) == nullptr)
+        if((item = element->FirstChildElement("look")) == nullptr
+            || item->QueryStringAttribute("name", &look) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Look of rigid body '%s' not properly defined!", solidName.c_str());
             return false;
-        if(item->QueryStringAttribute("name", &look) != XML_SUCCESS)
-            return false;
+        }
         //Dynamic parameters  
         if((item = element->FirstChildElement("mass")) == nullptr || item->QueryAttribute("value", &mass) != XML_SUCCESS)
             mass = Scalar(-1);
@@ -1413,134 +1541,140 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
         if(typeStr != "model")
         {
             if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
+            {
+                log.Print(MessageType::ERROR, "Definition of origin frame of rigid body '%s' missing!", solidName.c_str());
                 return false;
+            }
         }
         //---- Specific ----
         if(typeStr == "box")
         {
             const char* dims = nullptr;
-            Scalar dimX, dimY, dimZ;
+            Vector3 dim;
             Scalar thickness;
             
-            if((item = element->FirstChildElement("dimensions")) == nullptr)
+            if((item = element->FirstChildElement("dimensions")) == nullptr
+                || item->QueryStringAttribute("xyz", &dims) != XML_SUCCESS
+                || !ParseVector(dims, dim))
+            {
+                log.Print(MessageType::ERROR, "Dimensions of rigid body '%s' not properly defined!", solidName.c_str());
                 return false;
-            if(item->QueryStringAttribute("xyz", &dims) != XML_SUCCESS)
-                return false;
-            if(sscanf(dims, "%lf %lf %lf", &dimX, &dimY, &dimZ) != 3)
-                return false;
+            }    
             if(item->QueryAttribute("thickness", &thickness) != XML_SUCCESS)
                 thickness = Scalar(-1);
-            
-            solid = new Box(solidName, Vector3(dimX, dimY, dimZ), origin, std::string(mat), ePhyType, std::string(look), thickness, buoyant);
+            solid = new Box(solidName, dim, origin, std::string(mat), ePhyType, std::string(look), thickness, buoyant);
         }
         else if(typeStr == "cylinder")
         {
             Scalar radius, height, thickness;
-            
-            if((item = element->FirstChildElement("dimensions")) == nullptr)
+            if((item = element->FirstChildElement("dimensions")) == nullptr
+                || item->QueryAttribute("radius", &radius) != XML_SUCCESS
+                || item->QueryAttribute("height", &height) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Dimensions of rigid body '%s' not properly defined!", solidName.c_str());
                 return false;
-            if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-                return false;
-            if(item->QueryAttribute("height", &height) != XML_SUCCESS)
-                return false;
+            }
             if(item->QueryAttribute("thickness", &thickness) != XML_SUCCESS)
                 thickness = Scalar(-1);
-                
             solid = new Cylinder(solidName, radius, height, origin, std::string(mat), ePhyType, std::string(look), thickness, buoyant);
         }
         else if(typeStr == "sphere")
         {
             Scalar radius, thickness;
-            
-            if((item = element->FirstChildElement("dimensions")) == nullptr)
+            if((item = element->FirstChildElement("dimensions")) == nullptr
+                || item->QueryAttribute("radius", &radius) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Dimensions of rigid body '%s' not properly defined!", solidName.c_str());
                 return false;
-            if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-                return false;
+            }
             if(item->QueryAttribute("thickness", &thickness) != XML_SUCCESS)
                 thickness = Scalar(-1);
-            
             solid = new Sphere(solidName, radius, origin, std::string(mat), ePhyType, std::string(look), thickness, buoyant);
         }
         else if(typeStr == "torus")
         {
             Scalar radiusMaj, radiusMin, thickness;
-            
-            if((item = element->FirstChildElement("dimensions")) == nullptr)
+            if((item = element->FirstChildElement("dimensions")) == nullptr
+                || item->QueryAttribute("major_radius", &radiusMaj) != XML_SUCCESS
+                || item->QueryAttribute("minor_radius", &radiusMin) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Dimensions of rigid body '%s' not properly defined!", solidName.c_str());
                 return false;
-            if(item->QueryAttribute("major_radius", &radiusMaj) != XML_SUCCESS)
-                return false;
-            if(item->QueryAttribute("minor_radius", &radiusMin) != XML_SUCCESS)
-                return false;
+            }
             if(item->QueryAttribute("thickness", &thickness) != XML_SUCCESS)
                 thickness = Scalar(-1);
-            
             solid = new Torus(solidName, radiusMaj, radiusMin, origin, std::string(mat), ePhyType, std::string(look), thickness, buoyant);
         }
         else if(typeStr == "wing")
         {
             Scalar baseChord, tipChord, length, thickness;
             const char* naca = nullptr;
-
-            if((item = element->FirstChildElement("dimensions")) == nullptr)
+            if((item = element->FirstChildElement("dimensions")) == nullptr
+               || item->QueryAttribute("base_chord", &baseChord) != XML_SUCCESS
+               || item->QueryAttribute("tip_chord", &tipChord) != XML_SUCCESS
+               || item->QueryAttribute("length", &length) != XML_SUCCESS
+               || item->QueryStringAttribute("naca", &naca) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Dimensions of rigid body '%s' not properly defined!", solidName.c_str());
                 return false;
-            if(item->QueryAttribute("base_chord", &baseChord) != XML_SUCCESS)
-                return false;
-            if(item->QueryAttribute("tip_chord", &tipChord) != XML_SUCCESS)
-                return false;
-            if(item->QueryAttribute("length", &length) != XML_SUCCESS)
-                return false;
-            if(item->QueryStringAttribute("naca", &naca) != XML_SUCCESS)
-                return false;
+            }
             if(item->QueryAttribute("thickness", &thickness) != XML_SUCCESS)
                 thickness = Scalar(-1);
 
             std::string nacaStr(naca);
             if(nacaStr.size() != 4)
+            {
+                log.Print(MessageType::ERROR, "Incorrect NACA code for wind '%s'!", solidName.c_str());
                 return false;
-            
+            }
             solid = new Wing(solidName, baseChord, tipChord, nacaStr, length, origin, std::string(mat), ePhyType, std::string(look), thickness, buoyant);
         }
         else if(typeStr == "model")
         {
             const char* phyMesh = nullptr;
-            Scalar phyScale;
+            Scalar phyScale(1);
             Transform phyOrigin;
-            Scalar thickness;
-        
+            Scalar thickness(-1);
+
             if((item = element->FirstChildElement("physical")) == nullptr)
-                return false;
-            XMLElement* item2;
-            if((item2 = item->FirstChildElement("mesh")) == nullptr)
-                return false;
-            if(item2->QueryStringAttribute("filename", &phyMesh) != XML_SUCCESS)
-                return false;
-            if(item2->QueryAttribute("scale", &phyScale) != XML_SUCCESS)
-                phyScale = Scalar(1);
-            if((item2 = item->FirstChildElement("thickness")) != nullptr)
             {
-                if(item2->QueryAttribute("value", &thickness) != XML_SUCCESS)
-                    thickness = Scalar(-1);
-            }
-            else
-                thickness = Scalar(-1);
-            if((item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, phyOrigin))
+                log.Print(MessageType::ERROR, "Physical mesh of rigid body '%s' not defined!", solidName.c_str());
                 return false;
-        
+            }
+            XMLElement* item2;
+            if((item2 = item->FirstChildElement("mesh")) == nullptr
+                || item2->QueryStringAttribute("filename", &phyMesh) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Physical mesh of rigid body '%s' not properly defined!", solidName.c_str());
+                return false;
+            }
+            item2->QueryAttribute("scale", &phyScale);
+            if((item2 = item->FirstChildElement("thickness")) != nullptr)
+                item2->QueryAttribute("value", &thickness);
+            if((item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, phyOrigin))
+            {
+                log.Print(MessageType::ERROR, "Physical mesh of rigid body '%s' not properly defined!", solidName.c_str());
+                return false;
+            }
+            
             if((item = element->FirstChildElement("visual")) != nullptr)
             {
                 const char* graMesh = nullptr;
-                Scalar graScale;
+                Scalar graScale(1);
                 Transform graOrigin;
-            
-                if((item = item->FirstChildElement("mesh")) == nullptr)
+                
+                if((item = item->FirstChildElement("mesh")) == nullptr
+                || item->QueryStringAttribute("filename", &graMesh) != XML_SUCCESS)
+                {
+                    log.Print(MessageType::ERROR, "Visual mesh of rigid body '%s' not properly defined!", solidName.c_str());
                     return false;
-                if(item->QueryStringAttribute("filename", &graMesh) != XML_SUCCESS)
-                    return false;
-                if(item->QueryAttribute("scale", &graScale) != XML_SUCCESS)
-                    graScale = Scalar(1);
+                }
+                item->QueryAttribute("scale", &graScale);
                 if((item = item->NextSiblingElement("origin")) == nullptr || !ParseTransform(item, graOrigin))
+                {
+                    log.Print(MessageType::ERROR, "Visual mesh of rigid body '%s' not properly defined!", solidName.c_str());
                     return false;
-          
+                }          
                 solid = new Polyhedron(solidName, GetFullPath(std::string(graMesh)), graScale, graOrigin, GetFullPath(std::string(phyMesh)), phyScale, phyOrigin, std::string(mat), ePhyType, std::string(look), thickness, buoyant); 
             }
             else
@@ -1549,7 +1683,10 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
             }
         }
         else
+        {
+            log.Print(MessageType::ERROR, "Unknown type of rigid body '%s'!", solidName.c_str());
             return false;
+        }
          
         //Modify automatically calculated dynamical properties
         if(mass > Scalar(0) && btFuzzyZero(I.length2()) && !cgok)
@@ -1575,9 +1712,11 @@ bool ScenarioParser::ParseSolid(XMLElement* element, SolidEntity*& solid, std::s
             contactK = contactD = Scalar(-1);
 
         if(contactK > Scalar(0) && contactD >= Scalar(0))
+        {
+            log.Print(MessageType::INFO, "Using soft contact for rigid body '%s'.", solidName.c_str());
             solid->SetContactProperties(true, contactK, contactD);
+        }
     }
-       
     return true;
 }
 
@@ -1591,15 +1730,28 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
     Transform trans;
     
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Robot name missing!");
         return false;
+    }
+    std::string robotName(name);
     if(element->QueryAttribute("fixed", &fixed) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Base type of robot '%s' not specified!", robotName.c_str());
         return false;
+    }
     if(element->QueryAttribute("self_collisions", &selfCollisions) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Self-collision flag for robot '%s' not specified!", robotName.c_str());
         return false;
+    }
     if((item = element->FirstChildElement("world_transform")) == nullptr || !ParseTransform(item, trans))
+    {
+        log.Print(MessageType::ERROR, "Initial pose of robot '%s', in the world frame, missing!", robotName.c_str());
         return false;
+    }
 
-    Robot* robot = new Robot(std::string(name), fixed);
+    Robot* robot = new Robot(robotName, fixed);
 
     //---- Links ----
     //Base link
@@ -1607,13 +1759,13 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
     
     if((item = element->FirstChildElement("base_link")) == nullptr)
     {
-        cError("Scenario parser: base link of robot '%s' missing!", name);
+        log.Print(MessageType::ERROR, "Base link of robot '%s' missing!", robotName.c_str());
         delete robot;
         return false;
     }
     if(!ParseLink(item, robot, baseLink))
     {
-        cError("Scenario parser: base link of robot '%s' not properly defined!", name);
+        log.Print(MessageType::ERROR, "Base link of robot '%s' not properly defined!", robotName.c_str());
         delete robot;
         return false;
     }
@@ -1627,7 +1779,7 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
     {
         if(!ParseLink(item, robot, link))
         {
-            cError("Scenario parser: link of robot '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Link of robot '%s' not properly defined!", robotName.c_str());
             delete robot;
             return false;
         }        
@@ -1643,7 +1795,7 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
     {
         if(!ParseJoint(item, robot))
         {
-            cError("Scenario parser: joint of robot '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Joint of robot '%s' not properly defined!", robotName.c_str());
             delete robot;
             return false;
         }
@@ -1658,7 +1810,7 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
     {
         if(!ParseSensor(item, robot))
         {
-            cError("Scenario parser: sensor of robot '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Sensor of robot '%s' not properly defined!", robotName.c_str());
             delete robot;
             return false;
         }
@@ -1671,7 +1823,7 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
     {
         if(!ParseActuator(item, robot))
         {
-            cError("Scenario parser: actuator of robot '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Actuator of robot '%s' not properly defined!", robotName.c_str());
             delete robot;
             return false;
         }
@@ -1685,7 +1837,7 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
         Light* l = ParseLight(item, robot->getName());
         if(l == nullptr)
         {
-            cError("Scenario parser: light of robot '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Light of robot '%s' not properly defined!", robotName.c_str());
             delete robot;
             return false;
         }
@@ -1697,12 +1849,12 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
             if( ((item2 = item->FirstChildElement("link")) == nullptr || item2->QueryStringAttribute("name", &linkName) != XML_SUCCESS)
                 || ((item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin)) )
             {
-                cError("Scenario parser: light of robot '%s' not properly defined!", name);
+                log.Print(MessageType::ERROR, "Light of robot '%s' not properly defined!", robotName.c_str());
                 delete l;
                 delete robot;
                 return false;
             }
-            robot->AddLinkActuator(l, robot->getName() + "/" + std::string(linkName), origin);
+            robot->AddLinkActuator(l, robotName + "/" + std::string(linkName), origin);
         }
         item = item->NextSiblingElement("light");
     }
@@ -1714,7 +1866,7 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
         Comm* comm = ParseComm(item, robot->getName());
         if(comm == nullptr)
         {
-            cError("Scenario parser: communication device of robot '%s' not properly defined!", name);
+            log.Print(MessageType::ERROR, "Communication device of robot '%s' not properly defined!", robotName.c_str());
             delete robot;
             return false;
         }
@@ -1726,12 +1878,12 @@ bool ScenarioParser::ParseRobot(XMLElement* element)
             if( ((item2 = item->FirstChildElement("link")) == nullptr || item2->QueryStringAttribute("name", &linkName) != XML_SUCCESS)
                 || ((item2 = item->FirstChildElement("origin")) == nullptr || !ParseTransform(item2, origin)) )
             {
-                cError("Scenario parser: communication device of robot '%s' not properly defined!", name);
+                log.Print(MessageType::ERROR, "Communication device of robot '%s' not properly defined!", robotName.c_str());
                 delete comm;
                 delete robot;
                 return false;
             }
-            robot->AddComm(comm, robot->getName() + "/" + std::string(linkName), origin);
+            robot->AddComm(comm, robotName + "/" + std::string(linkName), origin);
         }
         item = item->NextSiblingElement("comm");
     }
@@ -1754,23 +1906,46 @@ bool ScenarioParser::ParseJoint(XMLElement* element, Robot* robot)
     Transform origin;
     
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Joint name missing (robot '%s')!", robot->getName().c_str());   
         return false;
+    }
+    std::string jointName = robot->getName() + "/" + std::string(name);
+
     if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of joint '%s' missing!", jointName.c_str());   
         return false;
+    }
     std::string typeStr(type);
+    
     XMLElement* item;
     if((item = element->FirstChildElement("parent")) == nullptr)
+    {
+        log.Print(MessageType::ERROR, "Parent definition for joint '%s' missing!", jointName.c_str());
         return false;
+    }
     if(item->QueryStringAttribute("name", &parent) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Parent name for joint '%s' missing!", jointName.c_str());   
         return false;
+    }
     if((item = element->FirstChildElement("child")) == nullptr)
+    {
+        log.Print(MessageType::ERROR, "Child definition for joint '%s' missing!", jointName.c_str());
         return false;
+    }
     if(item->QueryStringAttribute("name", &child) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Child name for joint '%s' missing!", jointName.c_str());   
         return false;    
+    }
     if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
+    {
+        log.Print(MessageType::ERROR, "Origin frame of joint '%s' missing!", jointName.c_str());
         return false;
+    }
     
-    std::string jointName = robot->getName() + "/" + std::string(name);
     std::string parentName = robot->getName() + "/" + std::string(parent);
     std::string childName = robot->getName() + "/" + std::string(child);
 
@@ -1781,39 +1956,108 @@ bool ScenarioParser::ParseJoint(XMLElement* element, Robot* robot)
     else if(typeStr == "prismatic" || typeStr == "revolute")
     {
         const char* vec = nullptr;
-        Scalar x, y, z;
+        Vector3 axis;
         Scalar posMin(1);
         Scalar posMax(-1);
         Scalar damping(-1);
         
-        if((item = element->FirstChildElement("axis")) == nullptr)
+        if((item = element->FirstChildElement("axis")) == nullptr
+            || item->QueryStringAttribute("xyz", &vec) != XML_SUCCESS
+            || !ParseVector(vec, axis))
+        {
+            log.Print(MessageType::ERROR, "Axis of joint '%s' not properly defined!", jointName.c_str());
             return false;
-        if(item->QueryStringAttribute("xyz", &vec) != XML_SUCCESS)
-            return false;
-        if(sscanf(vec, "%lf %lf %lf", &x, &y, &z) != 3)
-            return false;
+        }     
         if((item = element->FirstChildElement("limits")) != nullptr) //Optional
         {
             if((item->QueryAttribute("min", &posMin) != XML_SUCCESS) || (item->QueryAttribute("max", &posMax) != XML_SUCCESS))
-                return false;
+                log.Print(MessageType::WARNING, "Limits of joint '%s' not properly defined - using defaults.", jointName.c_str());
         }
         if((item = element->FirstChildElement("damping")) != nullptr) //Optional
         {
             if(item->QueryAttribute("value", &damping) != XML_SUCCESS)
-                return false;
+                log.Print(MessageType::WARNING, "Damping of joint '%s' not properly defined - using defaults.", jointName.c_str());
         }
         
         if(typeStr == "prismatic")
-            robot->DefinePrismaticJoint(jointName, parentName, childName, origin, Vector3(x, y, z), std::make_pair(posMin, posMax), damping);
+            robot->DefinePrismaticJoint(jointName, parentName, childName, origin, axis, std::make_pair(posMin, posMax), damping);
         else
-            robot->DefineRevoluteJoint(jointName, parentName, childName, origin, Vector3(x, y, z), std::make_pair(posMin, posMax), damping);
+            robot->DefineRevoluteJoint(jointName, parentName, childName, origin, axis, std::make_pair(posMin, posMax), damping);
     }
     else
+    {
+        log.Print(MessageType::ERROR, "Joint '%s' has unknown type!", jointName.c_str());
         return false;
+    }
     
     return true;
 }
-        
+
+bool ScenarioParser::ParseActuator(XMLElement* element, Robot* robot)
+{
+    //Parse
+    Actuator* act = ParseActuator(element, robot->getName());
+    if(act == nullptr)
+        return false;
+
+    //Attach
+    XMLElement* item;
+    switch(act->getType())
+    {
+        //Joint actuators
+        case ActuatorType::SERVO:
+        {
+            const char* jointName = nullptr;
+            
+            if((item = element->FirstChildElement("joint")) == nullptr
+                || item->QueryStringAttribute("name", &jointName) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Joint definition for actuator '%s' missing!", act->getName().c_str());
+                delete act;
+                return false;
+            }
+            robot->AddJointActuator((JointActuator*)act, robot->getName() + "/" + std::string(jointName));
+        }
+            break;
+
+        //Link actuators
+        case ActuatorType::THRUSTER:
+        case ActuatorType::PROPELLER:
+        case ActuatorType::RUDDER:
+        case ActuatorType::VBS:
+        {
+            const char* linkName = nullptr;
+            Transform origin; 
+
+            if((item = element->FirstChildElement("link")) == nullptr
+                || item->QueryStringAttribute("name", &linkName) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Link definition for actuator '%s' missing!", act->getName().c_str());
+                delete act;
+                return false;
+            }
+            if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
+            {
+                log.Print(MessageType::ERROR, "Origin frame of actuator '%s' missing!", act->getName().c_str());
+                delete act;
+                return false;
+            }
+            robot->AddLinkActuator((LinkActuator*)act, robot->getName() + "/" + std::string(linkName), origin);
+        }
+            break;
+
+        //Unsupported
+        default:
+        {
+            log.Print(MessageType::ERROR, "Unsupported actuator type found in definition of robot '%s'!", robot->getName().c_str());
+            delete act;
+            return false;
+        }
+            break;
+    }
+    return true;
+}
+
 bool ScenarioParser::ParseSensor(XMLElement* element, Robot* robot)
 {
     //Parse
@@ -1832,6 +2076,7 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Robot* robot)
             if((item = element->FirstChildElement("joint")) == nullptr
                  || item->QueryStringAttribute("name", &jointName) != XML_SUCCESS)
             {
+                log.Print(MessageType::ERROR, "Joint definition for sensor '%s' missing!", sens->getName().c_str());
                 delete sens;
                 return false;
             }
@@ -1848,12 +2093,14 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Robot* robot)
             if((item = element->FirstChildElement("link")) == nullptr 
                 || item->QueryStringAttribute("name", &linkName) != XML_SUCCESS)
             {
+                log.Print(MessageType::ERROR, "Link definition for sensor '%s' missing!", sens->getName().c_str());
                 delete sens;
                 return false;
             }
             if((item = element->FirstChildElement("origin")) == nullptr 
                 || !ParseTransform(item, origin))
             {
+                log.Print(MessageType::ERROR, "Origin frame of sensor '%s' missing!", sens->getName().c_str());
                 delete sens;
                 return false;
             }
@@ -1864,136 +2111,15 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Robot* robot)
         }
             break;
 
+        //Unsupported
         default:
         {
+            log.Print(MessageType::ERROR, "Unsupported sensor type found in definition of robot '%s'!", robot->getName().c_str());
             delete sens;
             return false;
         }
             break;
     }
-    return true;
-}
-
-bool ScenarioParser::ParseActuator(XMLElement* element, Robot* robot)
-{
-    //---- Common ----
-    const char* name = nullptr;
-    const char* type = nullptr;
-    
-    if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
-        return false;
-    if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
-        return false;
-    std::string typeStr(type);
-    
-    std::string actuatorName = robot->getName() + "/" + std::string(name);
-    
-    //---- Specific ----
-    XMLElement* item;
-    if(typeStr == "servo")
-    {
-        const char* jointName = nullptr;
-        Scalar kp, kv, maxTau;
-        
-        if((item = element->FirstChildElement("joint")) == nullptr)
-            return false;
-        if(item->QueryStringAttribute("name", &jointName) != XML_SUCCESS)
-            return false;
-        if((item = element->FirstChildElement("controller")) == nullptr 
-            || item->QueryAttribute("position_gain", &kp) != XML_SUCCESS 
-            || item->QueryAttribute("velocity_gain", &kv) != XML_SUCCESS
-            || item->QueryAttribute("max_torque", &maxTau) != XML_SUCCESS)
-            return false;
-        
-        Servo* srv = new Servo(actuatorName, kp, kv, maxTau);
-        robot->AddJointActuator(srv, robot->getName() + "/" + std::string(jointName));
-    }
-    else if(typeStr == "thruster" || typeStr == "propeller")
-    {
-        const char* linkName = nullptr;
-        const char* propFile = nullptr;
-        const char* mat = nullptr;
-        const char* look = nullptr;
-        Scalar diameter, cThrust, cTorque, maxRpm, propScale, cThrustBack;
-        bool rightHand;
-        bool inverted = false;
-        Transform origin;
-        
-        if((item = element->FirstChildElement("link")) == nullptr)
-            return false;
-        if(item->QueryStringAttribute("name", &linkName) != XML_SUCCESS)
-            return false;
-        if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
-            return false;
-        if((item = element->FirstChildElement("specs")) == nullptr 
-            || item->QueryAttribute("thrust_coeff", &cThrust) != XML_SUCCESS 
-            || item->QueryAttribute("torque_coeff", &cTorque) != XML_SUCCESS
-            || item->QueryAttribute("max_rpm", &maxRpm) != XML_SUCCESS)
-            return false;
-        cThrustBack = cThrust;
-        item->QueryAttribute("thrust_coeff_backward", &cThrustBack); //Optional
-        item->QueryAttribute("inverted", &inverted); //Optional
-        if((item = element->FirstChildElement("propeller")) == nullptr || item->QueryAttribute("diameter", &diameter) != XML_SUCCESS || item->QueryAttribute("right", &rightHand) != XML_SUCCESS)
-            return false;
-        XMLElement* item2;
-        if((item2 = item->FirstChildElement("mesh")) == nullptr || item2->QueryStringAttribute("filename", &propFile) != XML_SUCCESS)
-            return false;
-        if(item2->QueryAttribute("scale", &propScale) != XML_SUCCESS)
-            propScale = Scalar(1);
-        if((item2 = item->FirstChildElement("material")) == nullptr || item2->QueryStringAttribute("name", &mat) != XML_SUCCESS)
-            return false;
-        if((item2 = item->FirstChildElement("look")) == nullptr || item2->QueryStringAttribute("name", &look) != XML_SUCCESS)
-            return false;
-
-        if(typeStr == "thruster")
-        {
-            Polyhedron* prop = new Polyhedron(actuatorName + "/Propeller", GetFullPath(std::string(propFile)), propScale, I4(), std::string(mat), BodyPhysicsType::SUBMERGED, std::string(look));
-            Thruster* th = new Thruster(actuatorName, prop, diameter, std::make_pair(cThrust, cThrustBack), cTorque, maxRpm, rightHand, inverted);
-            robot->AddLinkActuator(th, robot->getName() + "/" + std::string(linkName), origin);
-        }
-        else //propeller
-        {
-            Polyhedron* prop = new Polyhedron(actuatorName + "/Propeller", GetFullPath(std::string(propFile)), propScale, I4(), std::string(mat), BodyPhysicsType::AERODYNAMIC, std::string(look));
-            Propeller* p = new Propeller(actuatorName, prop, diameter, cThrust, cTorque, maxRpm, rightHand, inverted);
-            robot->AddLinkActuator(p, robot->getName() + "/" + std::string(linkName), origin);
-        }
-    }
-    else if(typeStr == "vbs")
-    {
-        const char* linkName = nullptr;
-        Scalar initialV;
-        std::vector<std::string> vMeshes;
-        Transform origin;
-        
-        if((item = element->FirstChildElement("link")) == nullptr)
-            return false;
-        if(item->QueryStringAttribute("name", &linkName) != XML_SUCCESS)
-            return false;
-        if((item = element->FirstChildElement("origin")) == nullptr || !ParseTransform(item, origin))
-            return false;
-        if((item = element->FirstChildElement("volume")) == nullptr || item->QueryAttribute("initial", &initialV) != XML_SUCCESS)
-            return false;
-        XMLElement* item2;
-        const char* meshFile;
-        if((item2 = item->FirstChildElement("mesh")) == nullptr || item2->QueryStringAttribute("filename", &meshFile) != XML_SUCCESS)
-            return false;
-        vMeshes.push_back(GetFullPath(std::string(meshFile)));
-        while((item2 = item2->NextSiblingElement("mesh")) != nullptr)
-        {
-            const char* meshFile2;
-            if(item2->QueryStringAttribute("filename", &meshFile2) != XML_SUCCESS)
-                return false;
-            vMeshes.push_back(GetFullPath(std::string(meshFile2)));
-        }
-        if(vMeshes.size() < 2)
-            return false;
-        
-        VariableBuoyancy* vbs = new VariableBuoyancy(actuatorName, vMeshes, initialV);
-        robot->AddLinkActuator(vbs, robot->getName() + "/" + std::string(linkName), origin);
-    }
-    else
-        return false;
-    
     return true;
 }
 
@@ -2010,7 +2136,7 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Entity* ent)
     {
         case SensorType::JOINT:
         {
-            cError("Scenario parser: joint sensors can only be attached to robotic joints!");
+            log.Print(MessageType::ERROR, "Joint sensors can only be attached to robotic joints!");
             delete sens;
             return false;
         }
@@ -2027,7 +2153,7 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Entity* ent)
             }
             if(ent == nullptr)
             {
-                cError("Scenario parser: link sensors can only be attached to robotic links and moving bodies!");
+                log.Print(MessageType::ERROR, "Link sensors can only be attached to robotic links and moving bodies!");
                 delete sens;
                 return false;
             }
@@ -2039,7 +2165,7 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Entity* ent)
             }
             else
             {
-                cError("Scenario parser: link sensors can only be attached to robotic links and moving bodies!");
+                log.Print(MessageType::ERROR, "Link sensors can only be attached to robotic links and moving bodies!");
                 delete sens;
                 return false;
             }
@@ -2064,7 +2190,7 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Entity* ent)
                 vsens->AttachToStatic((StaticEntity*)ent, origin);   
             else
             {
-                cError("Scenario parser: trying to attach vision sensor to a non-physical body!");
+                log.Print(MessageType::ERROR, "Trying to attach vision sensor to a non-physical body!");
                 delete sens;
                 return false;
             }
@@ -2082,6 +2208,197 @@ bool ScenarioParser::ParseSensor(XMLElement* element, Entity* ent)
     return true;
 }
 
+Actuator* ScenarioParser::ParseActuator(XMLElement* element, const std::string& namePrefix)
+{
+    //---- Common ----
+    const char* name = nullptr;
+    const char* type = nullptr;
+    
+    if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Actuator name missing (namespace '%s')!", namePrefix.c_str());   
+        return nullptr;
+    }
+    std::string actuatorName = std::string(name);
+    if(namePrefix != "")
+        actuatorName = namePrefix + "/" + actuatorName;
+
+    if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of actuator '%s' missing!", actuatorName.c_str());
+        return nullptr;
+    }
+    std::string typeStr(type);
+    
+    //---- Specific ----
+    XMLElement* item;
+    if(typeStr == "servo")
+    {
+        Scalar kp, kv, maxTau;
+        if((item = element->FirstChildElement("controller")) == nullptr 
+            || item->QueryAttribute("position_gain", &kp) != XML_SUCCESS 
+            || item->QueryAttribute("velocity_gain", &kv) != XML_SUCCESS
+            || item->QueryAttribute("max_torque", &maxTau) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Controller definition for actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }    
+        Servo* srv = new Servo(actuatorName, kp, kv, maxTau);
+        return srv;
+    }
+    else if(typeStr == "thruster" || typeStr == "propeller")
+    {
+        const char* propFile = nullptr;
+        const char* mat = nullptr;
+        const char* look = nullptr;
+        Scalar diameter, cThrust, cTorque, maxRpm, propScale, cThrustBack;
+        bool rightHand;
+        bool inverted = false;
+        
+        if((item = element->FirstChildElement("specs")) == nullptr 
+            || item->QueryAttribute("thrust_coeff", &cThrust) != XML_SUCCESS 
+            || item->QueryAttribute("torque_coeff", &cTorque) != XML_SUCCESS
+            || item->QueryAttribute("max_rpm", &maxRpm) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of actuator '%s' not properly defined!", actuatorName.c_str());
+            return nullptr;
+        }
+        cThrustBack = cThrust;
+        item->QueryAttribute("thrust_coeff_backward", &cThrustBack); //Optional
+        item->QueryAttribute("inverted", &inverted); //Optional
+        if((item = element->FirstChildElement("propeller")) == nullptr || item->QueryAttribute("diameter", &diameter) != XML_SUCCESS || item->QueryAttribute("right", &rightHand) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Propeller definition of actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }
+        XMLElement* item2;
+        if((item2 = item->FirstChildElement("mesh")) == nullptr || item2->QueryStringAttribute("filename", &propFile) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Propeller mesh path of actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }
+        if(item2->QueryAttribute("scale", &propScale) != XML_SUCCESS)
+            propScale = Scalar(1);
+        if((item2 = item->FirstChildElement("material")) == nullptr || item2->QueryStringAttribute("name", &mat) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Propeller material of actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }
+        std::string lookStr = "";
+        if((item2 = item->FirstChildElement("look")) != nullptr)
+        {
+            item2->QueryStringAttribute("name", &look);
+            lookStr = std::string(look);
+        }
+
+        if(typeStr == "thruster")
+        {
+            Polyhedron* prop = new Polyhedron(actuatorName + "/Propeller", GetFullPath(std::string(propFile)), propScale, I4(), std::string(mat), BodyPhysicsType::SUBMERGED, lookStr);
+            Thruster* th = new Thruster(actuatorName, prop, diameter, std::make_pair(cThrust, cThrustBack), cTorque, maxRpm, rightHand, inverted);
+            return th;
+        }
+        else //propeller
+        {
+            Polyhedron* prop = new Polyhedron(actuatorName + "/Propeller", GetFullPath(std::string(propFile)), propScale, I4(), std::string(mat), BodyPhysicsType::AERODYNAMIC, lookStr);
+            Propeller* p = new Propeller(actuatorName, prop, diameter, cThrust, cTorque, maxRpm, rightHand, inverted);
+            return p;
+        }
+    }
+    else if(typeStr == "rudder")
+    {
+        const char* rudderFile = nullptr;
+        const char* mat = nullptr;
+        const char* look = nullptr;
+
+        Scalar area, dragCoeff, liftCoeff, maxAngle, rudderScale;
+        bool inverted = false;
+        
+        if((item = element->FirstChildElement("specs")) == nullptr 
+            || item->QueryAttribute("drag_coeff", &dragCoeff) != XML_SUCCESS
+            || item->QueryAttribute("lift_coeff", &liftCoeff) != XML_SUCCESS
+            || item->QueryAttribute("max_angle", &maxAngle) != XML_SUCCESS
+            || item->QueryAttribute("area", &area) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of actuator '%s' not properly defined!", actuatorName.c_str());
+            return nullptr;
+        }
+        item->QueryAttribute("inverted", &inverted); //Optional
+
+        if((item = element->FirstChildElement("visual")) == nullptr)
+        {
+            log.Print(MessageType::ERROR, "Visual definition of actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }
+        XMLElement* item2;
+        if((item2 = item->FirstChildElement("mesh")) == nullptr || item2->QueryStringAttribute("filename", &rudderFile) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Visual mesh path of actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }
+        if(item2->QueryAttribute("scale", &rudderScale) != XML_SUCCESS)
+            rudderScale = Scalar(1);
+        if((item2 = item->FirstChildElement("material")) == nullptr || item2->QueryStringAttribute("name", &mat) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Visual material of actuator '%s' missing!", actuatorName.c_str());
+            return nullptr;
+        }
+        std::string lookStr = "";
+        if((item2 = item->FirstChildElement("look")) != nullptr)
+        {
+            item2->QueryStringAttribute("name", &look);
+            lookStr = std::string(look);
+        }
+
+        Transform graOrigin = I4();
+        if((item2 = item->FirstChildElement("origin")) != nullptr && !ParseTransform(item2, graOrigin))
+        {
+            log.Print(MessageType::ERROR, "Visual origin of actuator '%s' is not properly defined!", actuatorName.c_str());
+            return nullptr;
+        }
+
+        Polyhedron* rudder = new Polyhedron(actuatorName + "/Rudder", GetFullPath(std::string(rudderFile)), rudderScale, graOrigin, std::string(mat), BodyPhysicsType::AERODYNAMIC, lookStr);
+        Rudder* r = new Rudder(actuatorName, rudder, area, liftCoeff, dragCoeff, maxAngle, inverted);
+        return r;
+    }
+    else if(typeStr == "vbs")
+    {
+        Scalar initialV;
+        std::vector<std::string> vMeshes;
+        if((item = element->FirstChildElement("volume")) == nullptr || item->QueryAttribute("initial", &initialV) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Volume of actuator '%s' not properly defined!", actuatorName.c_str());
+            return nullptr;
+        }
+        XMLElement* item2;
+        const char* meshFile;
+        if((item2 = item->FirstChildElement("mesh")) == nullptr || item2->QueryStringAttribute("filename", &meshFile) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Volume mesh of actuator '%s' not properly defined!", actuatorName.c_str());
+            return nullptr;
+        }
+        vMeshes.push_back(GetFullPath(std::string(meshFile)));
+        while((item2 = item2->NextSiblingElement("mesh")) != nullptr)
+        {
+            const char* meshFile2;
+            if(item2->QueryStringAttribute("filename", &meshFile2) != XML_SUCCESS)
+            {
+                log.Print(MessageType::ERROR, "Volume mesh of actuator '%s' not properly defined!", actuatorName.c_str());
+                return nullptr;
+            }
+            vMeshes.push_back(GetFullPath(std::string(meshFile2)));
+        }
+        if(vMeshes.size() < 2)
+        {
+            log.Print(MessageType::ERROR, "Actuator '%s' requires definition of at least two volumes!", actuatorName.c_str());
+            return nullptr;
+        }
+        VariableBuoyancy* vbs = new VariableBuoyancy(actuatorName, vMeshes, initialV);
+        return vbs;
+    }
+    else
+        return nullptr;
+}
+
 Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& namePrefix)
 {
     //---- Common ----
@@ -2090,20 +2407,78 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
     Scalar rate;
     
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Sensor name missing (namespace '%s')!", namePrefix.c_str());
         return nullptr;
-    if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
-        return nullptr;
-    if(element->QueryAttribute("rate", &rate) != XML_SUCCESS)
-        rate = Scalar(-1);
-    std::string typeStr(type);
-    
+    }
     std::string sensorName = std::string(name);
     if(namePrefix != "")
         sensorName = namePrefix + "/" + sensorName;
     
+    if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of sensor '%s' missing!", sensorName.c_str());
+        return nullptr;
+    }
+    if(element->QueryAttribute("rate", &rate) != XML_SUCCESS)
+        rate = Scalar(-1);
+    std::string typeStr(type);
+    
     //---- Specific ----
     XMLElement* item;
-    if(typeStr == "gyro")
+    if(typeStr == "accelerometer")
+    {
+        int history;
+        if((item = element->FirstChildElement("history")) == nullptr || item->QueryAttribute("samples", &history) != XML_SUCCESS)
+            history = -1;
+            
+        Accelerometer* acc = new Accelerometer(sensorName, rate, history);
+        
+        //Optional range definition
+        if((item = element->FirstChildElement("range")) != nullptr)    
+        {
+            const char* accel = nullptr;
+            Vector3 laxyz;
+            Scalar la;
+
+            if(item->QueryStringAttribute("linear_acceleration", &accel) == XML_SUCCESS  
+               && ParseVector(accel, laxyz))
+            {
+                acc->setRange(laxyz);    
+            }
+            else if(item->QueryAttribute("linear_acceleration", &la) == XML_SUCCESS)
+            {
+                acc->setRange(Vector3(la, la, la));
+            }
+            else
+            {
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            }     
+        }
+        //Optional noise definition
+        if((item = element->FirstChildElement("noise")) != nullptr)    
+        {
+            const char* accel = nullptr;
+            Vector3 laxyz;
+            Scalar la;
+
+            if(item->QueryStringAttribute("linear_acceleration", &accel) == XML_SUCCESS  
+               && ParseVector(accel, laxyz))
+            {
+                acc->setNoise(laxyz);
+            }
+            else if(item->QueryAttribute("linear_acceleration", &la) == XML_SUCCESS)
+            {
+                acc->setNoise(Vector3(la, la, la));   
+            }
+            else 
+            {
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            }
+        }
+        return acc;
+    }
+    else if(typeStr == "gyro")
     {
         int history;
         if((item = element->FirstChildElement("history")) == nullptr || item->QueryAttribute("samples", &history) != XML_SUCCESS)
@@ -2111,30 +2486,63 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         Gyroscope* gyro = new Gyroscope(sensorName, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
-            Scalar velocity;
-            if(item->QueryAttribute("angular_velocity", &velocity) != XML_SUCCESS)
+            Scalar av;
+            Vector3 avxyz;
+            const char* velocity = nullptr;
+            
+            if(item->QueryStringAttribute("angular_velocity", &velocity) == XML_SUCCESS 
+               && ParseVector(velocity, avxyz))
             {
-                delete gyro;
-                return nullptr;
+                gyro->setRange(avxyz);
             }
-            gyro->setRange(velocity);
+            else if(item->QueryAttribute("angular_velocity", &av) == XML_SUCCESS)
+            {
+                gyro->setRange(Vector3(av, av, av));
+            }
+            else
+            {
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            }
         }
-        
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            Scalar velocity;
-            Scalar bias = Scalar(0);
-            if(item->QueryAttribute("angular_velocity", &velocity) != XML_SUCCESS)
+            Scalar av;
+            Vector3 avxyz = V0();
+            const char* velocity = nullptr;
+            Scalar b;
+            Vector3 bxyz = V0();
+            const char* bias = nullptr;
+            int c = 0;
+
+            if(item->QueryStringAttribute("angular_velocity", &velocity) == XML_SUCCESS && ParseVector(velocity, avxyz))
             {
-                delete gyro;
-                return nullptr;
+                ++c;
             }
-            item->QueryAttribute("bias", &bias);
-            gyro->setNoise(velocity, bias);
+            else if(item->QueryAttribute("angular_velocity", &av) == XML_SUCCESS)
+            {
+                avxyz = Vector3(av, av, av);
+                ++c;
+            }
+            
+            if(item->QueryStringAttribute("bias", &bias) == XML_SUCCESS && ParseVector(bias, bxyz))
+            {
+                ++c;
+            }
+            else if(item->QueryAttribute("bias", &b) == XML_SUCCESS)
+            {
+                bxyz = Vector3(b, b, b);
+                ++c;
+            }
+
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                gyro->setNoise(avxyz, bxyz);
         }
-        
         return gyro;
     }
     else if(typeStr == "imu")
@@ -2145,61 +2553,100 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         IMU* imu = new IMU(sensorName, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
             const char* velocity = nullptr;
-            Vector3 vxyz;
-            Scalar v;
+            Vector3 avxyz = VMAX();
+            Scalar av;
+            const char* acc = nullptr;
+            Vector3 laxyz = VMAX();
+            Scalar la;
+            int c = 0;
+            
             if(item->QueryStringAttribute("angular_velocity", &velocity) == XML_SUCCESS  
-               && ParseVector(velocity, vxyz))
+               && ParseVector(velocity, avxyz))
             {
-                imu->setRange(vxyz);    
+                ++c;
             }
-            else if(item->QueryAttribute("angular_velocity", &v) == XML_SUCCESS)
+            else if(item->QueryAttribute("angular_velocity", &av) == XML_SUCCESS)
             {
-                imu->setRange(Vector3(v, v, v));
+                avxyz = Vector3(av, av, av);
+                ++c;
             }
+            
+            if(item->QueryStringAttribute("linear_acceleration", &acc) == XML_SUCCESS  
+               && ParseVector(acc, laxyz))
+            {
+                ++c;
+            }
+            else if(item->QueryAttribute("linear_acceleration", &la) == XML_SUCCESS)
+            {
+                laxyz = Vector3(la, la, la);
+                ++c;
+            }
+            
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
             else
-            {
-                delete imu;
-                return nullptr;
-            }
+                imu->setRange(avxyz, laxyz);
         }
-        
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             const char* angle = nullptr;
             const char* velocity = nullptr;
-            Vector3 axyz;
-            Vector3 avxyz;
+            const char* acc = nullptr;
+            Vector3 axyz = V0();
+            Vector3 avxyz = V0();
+            Vector3 laxyz = V0();
             Scalar a;
             Scalar av;
+            Scalar la;
             Scalar yawDrift = Scalar(0);
-            item->QueryAttribute("yaw_drift", &yawDrift);
+            int c = 0;
 
-            if(item->QueryStringAttribute("angle", &angle) == XML_SUCCESS && ParseVector(angle, axyz))
-                ;
+            if(item->QueryAttribute("yaw_drift", &yawDrift) == XML_SUCCESS)
+                ++c;
+
+            if(item->QueryStringAttribute("angle", &angle) == XML_SUCCESS 
+               && ParseVector(angle, axyz))
+            {
+                ++c;
+            }
             else if(item->QueryAttribute("angle", &a) == XML_SUCCESS)
+            {
                 axyz = Vector3(a, a, a);
-            else
-            {
-                delete imu;
-                return nullptr;
+                ++c;
             }
-            
-            if(item->QueryStringAttribute("angular_velocity", &velocity) == XML_SUCCESS && ParseVector(velocity, avxyz))
-                ;
+
+            if(item->QueryStringAttribute("angular_velocity", &velocity) == XML_SUCCESS 
+               && ParseVector(velocity, avxyz))
+            {
+                ++c;
+            }
             else if(item->QueryAttribute("angular_velocity", &av) == XML_SUCCESS)
-                avxyz = Vector3(av, av, av);
-            else
             {
-                delete imu;
-                return nullptr;
+                avxyz = Vector3(av, av, av);
+                ++c;
+            }
+
+            if(item->QueryStringAttribute("linear_acceleration", &acc) == XML_SUCCESS 
+               && ParseVector(acc, laxyz))
+            {
+                ++c;
+            }
+            else if(item->QueryAttribute("linear_acceleration", &la) == XML_SUCCESS)
+            {
+                laxyz = Vector3(la, la, la);
+                ++c;
             }
             
-            imu->setNoise(axyz, avxyz, yawDrift);
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                imu->setNoise(axyz, avxyz, yawDrift, laxyz);
         }
-        
         return imu;
     }
     else if(typeStr == "dvl")
@@ -2212,38 +2659,76 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             return nullptr;
             
         DVL* dvl = new DVL(sensorName, beamAngle, rate, history);
-        
+
+        //Optional range definition        
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
             const char* velocity = nullptr;
-            Scalar velx, vely, velz;
-            Scalar altMin, altMax;
+            Vector3 vxyz = VMAX();
+            Scalar v;
+            Scalar altMin(0);
+            Scalar altMax(BT_LARGE_FLOAT);
+            int c = 0;
             
-            if(item->QueryStringAttribute("velocity", &velocity) != XML_SUCCESS || sscanf(velocity, "%lf %lf %lf", &velx, &vely, &velz) != 3)
+            if(item->QueryStringAttribute("velocity", &velocity) == XML_SUCCESS  
+               && ParseVector(velocity, vxyz))
             {
-                delete dvl;
-                return nullptr;
+                ++c;
             }
-            if(item->QueryAttribute("altitude_min", &altMin) != XML_SUCCESS
-               || item->QueryAttribute("altitude_max", &altMax) != XML_SUCCESS)
+            else if(item->QueryAttribute("velocity", &v) == XML_SUCCESS)
             {
-                delete dvl;
-                return nullptr;
+                vxyz = Vector3(v, v, v);
+                ++c;
             }
-            dvl->setRange(Vector3(velx, vely, velz), altMin, altMax);
+            
+            if(item->QueryAttribute("altitude_min", &altMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("altitude_max", &altMax) == XML_SUCCESS)
+                ++c;
+            
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                dvl->setRange(vxyz, altMin, altMax);
         }
+        //Optional water mass measurmeent definition
+        if((item = element->FirstChildElement("water_layer")) != nullptr)
+        {
+            Scalar minSize(0);
+            Scalar boundaryNear(0);
+            Scalar boundaryFar(0);
+            item->QueryAttribute("minimum_layer_size", &minSize);
+            item->QueryAttribute("boundary_near", &boundaryNear);
+            item->QueryAttribute("boundary_far", &boundaryFar);
+            dvl->setWaterLayer(minSize, boundaryNear, boundaryFar);
+        }
+
+        //Optional range definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            Scalar velocity;
-            Scalar altitude;
-            if(item->QueryAttribute("velocity", &velocity) != XML_SUCCESS || item->QueryAttribute("altitude", &altitude) != XML_SUCCESS)
-            {
-                delete dvl;
-                return nullptr;
-            }
-            dvl->setNoise(velocity, altitude);
+            Scalar v(0);
+            Scalar vp(0);
+            Scalar wv(0);
+            Scalar wvp(0);
+            Scalar altitude(0);
+            int c = 0;
+
+            if(item->QueryAttribute("velocity", &v) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("velocity_percent", &vp) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("altitude", &altitude) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("water_velocity", &wv) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("water_velocity_percent", &wvp) == XML_SUCCESS)
+                ++c;
+            
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                dvl->setNoise(vp, v, altitude, wvp, wv);
         }
-        
         return dvl;
     }
     else if(typeStr == "gps")
@@ -2254,17 +2739,15 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         GPS* gps = new GPS(sensorName, rate, history);
         
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             Scalar ned;
-            if(item->QueryAttribute("ned_position", &ned) != XML_SUCCESS)
-            {
-                delete gps;
-                return nullptr;
-            }
-            gps->setNoise(ned);
+            if(item->QueryAttribute("ned_position", &ned) == XML_SUCCESS)
+                gps->setNoise(ned);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
         return gps;
     }
     else if(typeStr == "pressure")
@@ -2275,28 +2758,24 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         Pressure* press = new Pressure(sensorName, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
             Scalar pressure;
-            if(item->QueryAttribute("pressure", &pressure) != XML_SUCCESS)
-            {
-                delete press;
-                return nullptr;
-            }
-            press->setRange(pressure);
+            if(item->QueryAttribute("pressure", &pressure) == XML_SUCCESS)
+                press->setRange(pressure);
+            else
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             Scalar pressure;
-            if(item->QueryAttribute("pressure", &pressure) != XML_SUCCESS)
-            {
-                delete press;
-                return nullptr;
-            }
-            press->setNoise(pressure);
+            if(item->QueryAttribute("pressure", &pressure) == XML_SUCCESS)
+                press->setNoise(pressure);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
         return press;
     }
     else if(typeStr == "odometry")
@@ -2307,20 +2786,29 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         Odometry* odom = new Odometry(sensorName, rate, history);
         
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            Scalar position, velocity, angle, aVelocity;
-            if(item->QueryAttribute("position", &position) != XML_SUCCESS
-              || item->QueryAttribute("velocity", &velocity) != XML_SUCCESS
-              || item->QueryAttribute("angle", &angle) != XML_SUCCESS
-              || item->QueryAttribute("angular_velocity", &aVelocity) != XML_SUCCESS)
-            {
-                delete odom;
-                return nullptr;
-            }
-            odom->setNoise(position, velocity, angle, aVelocity);
-        }
+            Scalar p(0);
+            Scalar v(0);
+            Scalar angle(0);
+            Scalar av(0);
+            int c = 0;
         
+            if(item->QueryAttribute("position", &p) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("velocity", &v) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("angle", &angle) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("angular_velocity", &av) == XML_SUCCESS)
+                ++c;
+
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                odom->setNoise(p, v, angle, av);
+        }
         return odom;
     }
     else if(typeStr == "compass")
@@ -2331,17 +2819,15 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         Compass* compass = new Compass(sensorName, rate, history);
         
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             Scalar heading;
-            if(item->QueryAttribute("heading", &heading) != XML_SUCCESS)
-            {
-                delete compass;
-                return nullptr;
-            }
-            compass->setNoise(heading);
+            if(item->QueryAttribute("heading", &heading) == XML_SUCCESS)
+                compass->setNoise(heading);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
         return compass;
     }
     else if(typeStr == "profiler")
@@ -2352,36 +2838,42 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
         if((item = element->FirstChildElement("history")) == nullptr || item->QueryAttribute("samples", &history) != XML_SUCCESS)
             history = -1;
         if((item = element->FirstChildElement("specs")) == nullptr || item->QueryAttribute("fov", &fov) != XML_SUCCESS || item->QueryAttribute("steps", &steps) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
+        }
             
         Profiler* prof = new Profiler(sensorName, fov, steps, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
-            Scalar distMin, distMax;
+            Scalar distMin(0);
+            Scalar distMax(BT_LARGE_FLOAT);
+            int c = 0;
             
-            if(item->QueryAttribute("distance_min", &distMin) != XML_SUCCESS
-               || item->QueryAttribute("distance_max", &distMax) != XML_SUCCESS)
-            {
-                delete prof;
-                return nullptr;
-            }
-            prof->setRange(distMin, distMax);
+            if(item->QueryAttribute("distance_min", &distMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("distance_max", &distMax) == XML_SUCCESS)
+                ++c;
+            
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                prof->setRange(distMin, distMax);
         }
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             Scalar distance;
-            if(item->QueryAttribute("distance", &distance) != XML_SUCCESS)
-            {
-                delete prof;
-                return nullptr;
-            }
-            prof->setNoise(distance);
+            if(item->QueryAttribute("distance", &distance) == XML_SUCCESS)
+                prof->setNoise(distance);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
         return prof;
     }
-    else if(typeStr == "multibeam1d")
+    else if(typeStr == "multibeam" || typeStr == "multibeam1d")
     {
         int history;
         Scalar fov;
@@ -2393,29 +2885,32 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         Multibeam* mult = new Multibeam(sensorName, fov, steps, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
-            Scalar distMin, distMax;
+            Scalar distMin(0);
+            Scalar distMax(BT_LARGE_FLOAT);
+            int c = 0;
+
+            if(item->QueryAttribute("distance_min", &distMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("distance_max", &distMax) == XML_SUCCESS)
+                ++c;
             
-            if(item->QueryAttribute("distance_min", &distMin) != XML_SUCCESS
-               || item->QueryAttribute("distance_max", &distMax) != XML_SUCCESS)
-            {
-                delete mult;
-                return nullptr;
-            }
-            mult->setRange(distMin, distMax);
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                mult->setRange(distMin, distMax);
         }
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             Scalar distance;
-            if(item->QueryAttribute("distance", &distance) != XML_SUCCESS)
-            {
-                delete mult;
-                return nullptr;
-            }
-            mult->setNoise(distance);
+            if(item->QueryAttribute("distance", &distance) == XML_SUCCESS)
+                mult->setNoise(distance);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
         return mult;
     }
     else if(typeStr == "torque")
@@ -2426,28 +2921,24 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         Torque* torque = new Torque(sensorName, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
             Scalar tau;
-            if(item->QueryAttribute("torque", &tau) != XML_SUCCESS)
-            {
-                delete torque;
-                return nullptr;
-            }
-            torque->setRange(tau);
+            if(item->QueryAttribute("torque", &tau) == XML_SUCCESS)
+                torque->setRange(tau);
+            else
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             Scalar tau;
-            if(item->QueryAttribute("torque", &tau) != XML_SUCCESS)
-            {
-                delete torque;
-                return nullptr;
-            }
-            torque->setNoise(tau);
+            if(item->QueryAttribute("torque", &tau) == XML_SUCCESS)
+                torque->setNoise(tau);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
-        
         return torque;
     }
     else if(typeStr == "forcetorque")
@@ -2461,34 +2952,38 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             
         ForceTorque* ft = new ForceTorque(sensorName, origin, rate, history);
         
+        //Optional range definition
         if((item = element->FirstChildElement("range")) != nullptr)    
         {
             const char* force = nullptr;
             const char* torque = nullptr;
-            Scalar fx, fy, fz, tx, ty, tz;
-            
-            if(item->QueryStringAttribute("force", &force) != XML_SUCCESS || sscanf(force, "%lf %lf %lf", &fx, &fy, &fz) != 3)
-            {
-                delete ft;
-                return nullptr;
-            }
-            if(item->QueryStringAttribute("torque", &torque) != XML_SUCCESS || sscanf(torque, "%lf %lf %lf", &tx, &ty, &tz) != 3)
-            {
-                delete ft;
-                return nullptr;
-            }
-            ft->setRange(Vector3(fx, fy, fz), Vector3(tx, ty, tz));
+            Vector3 f = VMAX();
+            Vector3 t = VMAX();
+            int c = 0;
+
+            if(item->QueryStringAttribute("force", &force) == XML_SUCCESS && ParseVector(force, f))
+                ++c;
+            if(item->QueryStringAttribute("torque", &torque) != XML_SUCCESS && ParseVector(torque, t))
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Range of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                ft->setRange(f, t);
         }
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            Scalar force;
-            Scalar torque;
-            if(item->QueryAttribute("force", &force) != XML_SUCCESS || item->QueryAttribute("torque", &torque) != XML_SUCCESS)
-            {
-                delete ft;
-                return nullptr;
-            }
-            ft->setNoise(force, torque);
+            Scalar f(0);
+            Scalar t(0);
+            int c = 0;
+            if(item->QueryAttribute("force", &f) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("torque", &t) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
+            else
+                ft->setNoise(f, t);
         }
         return ft;
     }
@@ -2505,7 +3000,7 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
     {
         if(!isGraphicalSim())
         {
-            cError("Scenario parser: cameras not supported in console mode!");
+            log.Print(MessageType::ERROR, "Cameras not supported in console mode!");
             return nullptr;
         }
 
@@ -2515,29 +3010,42 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             || item->QueryAttribute("resolution_x", &resX) != XML_SUCCESS 
             || item->QueryAttribute("resolution_y", &resY) != XML_SUCCESS
             || item->QueryAttribute("horizontal_fov", &hFov) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
-            
+        }
+
         ColorCamera* cam;
         
-        if((item = element->FirstChildElement("rendering")) != nullptr) //Optional parameters
+        //Optional parameters
+        if((item = element->FirstChildElement("rendering")) != nullptr) 
         {
             Scalar minDist(0.02);
             Scalar maxDist(100000.0);
-            item->QueryAttribute("minimum_distance", &minDist);
-            item->QueryAttribute("maximum_distance", &maxDist);
-            cam = new ColorCamera(sensorName, resX, resY, hFov, rate, minDist, maxDist);
+            int c = 0;
+
+            if(item->QueryAttribute("minimum_distance", &minDist) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("maximum_distance", &maxDist) == XML_SUCCESS)
+                ++c;
+
+            if(c == 0)
+            {
+                log.Print(MessageType::WARNING, "Rendering options of camera '%s' not properly defined - using defaults.", sensorName.c_str());
+                cam = new ColorCamera(sensorName, resX, resY, hFov, rate);
+            }
+            else
+                cam = new ColorCamera(sensorName, resX, resY, hFov, rate, minDist, maxDist);
         }
         else
-        {
             cam = new ColorCamera(sensorName, resX, resY, hFov, rate);
-        }
         return cam;
     }
     else if(typeStr == "depthcamera")
     {
         if(!isGraphicalSim())
         {
-            cError("Scenario parser: depth cameras not supported in console mode!");
+            log.Print(MessageType::ERROR, "Depth cameras not supported in console mode!");
             return nullptr;
         }
 
@@ -2550,19 +3058,21 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             || item->QueryAttribute("horizontal_fov", &hFov) != XML_SUCCESS
             || item->QueryAttribute("depth_min", &depthMin) != XML_SUCCESS
             || item->QueryAttribute("depth_max", &depthMax) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
+        }
         
         DepthCamera* dcam = new DepthCamera(sensorName, resX, resY, hFov, depthMin, depthMax, rate);
 
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
             float depth;
-            if(item->QueryAttribute("depth", &depth) != XML_SUCCESS)
-            {
-                delete dcam;
-                return nullptr;
-            }
-            dcam->setNoise(depth);
+            if(item->QueryAttribute("depth", &depth) == XML_SUCCESS)
+                dcam->setNoise(depth);
+            else
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
         return dcam;
     }
@@ -2570,7 +3080,7 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
     {
         if(!isGraphicalSim())
         {
-            cError("Scenario parser: multibeam 2D not supported in console mode!");
+            log.Print(MessageType::ERROR, "Multibeam 2D not supported in console mode!");
             return nullptr;
         }
 
@@ -2584,8 +3094,11 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             || item->QueryAttribute("vertical_fov", &vFov) != XML_SUCCESS
             || item->QueryAttribute("range_min", &rangeMin) != XML_SUCCESS
             || item->QueryAttribute("range_max", &rangeMax) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
-        
+        }
+
         Multibeam2* mb = new Multibeam2(sensorName, resX, resY, hFov, vFov, rangeMin, rangeMax, rate);
         return mb;
     }
@@ -2593,7 +3106,7 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
     {
         if(!isGraphicalSim())
         {
-            cError("Scenario parser: FLS not supported in console mode!");
+            log.Print(MessageType::ERROR, "FLS not supported in console mode!");
             return nullptr;
         }
 
@@ -2609,12 +3122,23 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             || item->QueryAttribute("bins", &nBins) != XML_SUCCESS
             || item->QueryAttribute("horizontal_fov", &hFov) != XML_SUCCESS
             || item->QueryAttribute("vertical_fov", &vFov) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
+        }
+
+        //Optional settings
         if((item = element->FirstChildElement("settings")) != nullptr)
         {
-            item->QueryAttribute("range_min", &rangeMin);
-            item->QueryAttribute("range_max", &rangeMax);
-            item->QueryAttribute("gain", &gain);
+            int c = 0;
+            if(item->QueryAttribute("range_min", &rangeMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("range_max", &rangeMax) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("gain", &gain) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Settings of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
         if((item = element->FirstChildElement("display")) != nullptr)
             ParseColorMap(item, cMap);
@@ -2622,19 +3146,24 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
         FLS* fls = new FLS(sensorName, nBeams, nBins, hFov, vFov, rangeMin, rangeMax, cMap, rate);
         fls->setGain(gain);
 
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            float mul, add;
-            if(item->QueryAttribute("multiplicative", &mul) != XML_SUCCESS || item->QueryAttribute("additive", &add) != XML_SUCCESS)
-            {
-                delete fls;
-                return nullptr;
-            }
+            float mul = 0.025f;
+            float add = 0.035f;
+            int c = 0;
+            if(item->QueryAttribute("multiplicative", &mul) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("additive", &add) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
             fls->setNoise(mul, add);
         }
         else
         {
             fls->setNoise(0.025f, 0.035f); //Default values that look realistic
+            log.Print(MessageType::WARNING, "Noise of sensor '%s' not defined - using defaults.", sensorName.c_str());
         }
         return fls;
     }
@@ -2642,7 +3171,7 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
     {
         if(!isGraphicalSim())
         {
-            cError("Scenario parser: SSS not supported in console mode!");
+            log.Print(MessageType::ERROR, "SSS not supported in console mode!");
             return nullptr;
         }
 
@@ -2660,12 +3189,23 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             || item->QueryAttribute("horizontal_beam_width", &hFov) != XML_SUCCESS
             || item->QueryAttribute("vertical_beam_width", &vFov) != XML_SUCCESS
             || item->QueryAttribute("vertical_tilt", &tilt) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
+        }
+
+        //Optional settings
         if((item = element->FirstChildElement("settings")) != nullptr)
         {
-            item->QueryAttribute("range_min", &rangeMin);
-            item->QueryAttribute("range_max", &rangeMax);
-            item->QueryAttribute("gain", &gain);
+            int c = 0;
+            if(item->QueryAttribute("range_min", &rangeMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("range_max", &rangeMax) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("gain", &gain) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Settings of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
         if((item = element->FirstChildElement("display")) != nullptr)
             ParseColorMap(item, cMap);
@@ -2673,19 +3213,24 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
         SSS* sss = new SSS(sensorName, nBins, nLines, vFov, hFov, tilt, rangeMin, rangeMax, cMap, rate);
         sss->setGain(gain);
 
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            float mul, add;
-            if(item->QueryAttribute("multiplicative", &mul) != XML_SUCCESS || item->QueryAttribute("additive", &add) != XML_SUCCESS)
-            {
-                delete sss;
-                return nullptr;
-            }
+            float mul = 0.01f;
+            float add = 0.02f;
+            int c = 0;
+            if(item->QueryAttribute("multiplicative", &mul) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("additive", &add) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
             sss->setNoise(mul, add);
         }
         else
         {
             sss->setNoise(0.01f, 0.02f); //Default values that look realistic
+            log.Print(MessageType::WARNING, "Noise of sensor '%s' not defined - using defaults.", sensorName.c_str());
         }
         return sss;
     }
@@ -2693,7 +3238,7 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
     {
         if(!isGraphicalSim())
         {
-            cError("Scenario parser: MSIS not supported in console mode!");
+            log.Print(MessageType::ERROR, "MSIS not supported in console mode!");
             return nullptr;
         }
 
@@ -2712,14 +3257,27 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
             || item->QueryAttribute("bins", &nBins) != XML_SUCCESS
             || item->QueryAttribute("horizontal_beam_width", &hFov) != XML_SUCCESS
             || item->QueryAttribute("vertical_beam_width", &vFov) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of sensor '%s' not properly defined!", sensorName.c_str());
             return nullptr;
+        }
+
+        //Optional settings
         if((item = element->FirstChildElement("settings")) != nullptr)
         {
-            item->QueryAttribute("range_min", &rangeMin);
-            item->QueryAttribute("range_max", &rangeMax);
-            item->QueryAttribute("rotation_min", &rotMin);
-            item->QueryAttribute("rotation_max", &rotMax);
-            item->QueryAttribute("gain", &gain);
+            int c = 0;
+            if(item->QueryAttribute("range_min", &rangeMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("range_max", &rangeMax) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("rotation_min", &rotMin) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("rotation_max", &rotMax) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("gain", &gain) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Settings of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
         }
         if((item = element->FirstChildElement("display")) != nullptr)
             ParseColorMap(item, cMap);
@@ -2727,19 +3285,24 @@ Sensor* ScenarioParser::ParseSensor(XMLElement* element, const std::string& name
         MSIS* msis = new MSIS(sensorName, stepAngle, nBins, hFov, vFov, rotMin, rotMax, rangeMin, rangeMax, cMap, rate);
         msis->setGain(gain);
 
+        //Optional noise definition
         if((item = element->FirstChildElement("noise")) != nullptr)    
         {
-            float mul, add;
-            if(item->QueryAttribute("multiplicative", &mul) != XML_SUCCESS || item->QueryAttribute("additive", &add) != XML_SUCCESS)
-            {
-                delete msis;
-                return nullptr;
-            }
+            float mul = 0.02f;
+            float add = 0.04f;
+            int c = 0;
+            if(item->QueryAttribute("multiplicative", &mul) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("additive", &add) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of sensor '%s' not properly defined - using defaults.", sensorName.c_str());
             msis->setNoise(mul, add);
         }
         else
         {
             msis->setNoise(0.02f, 0.04f); //Default values that look realistic
+            log.Print(MessageType::WARNING, "Noise of sensor '%s' not defined - using defaults.", sensorName.c_str());
         }
         return msis;
     }
@@ -2751,13 +3314,16 @@ Light* ScenarioParser::ParseLight(XMLElement* element, const std::string& namePr
 {
     if(!isGraphicalSim())
     {
-        cError("Scenario parser: lights not supported in console mode!");
+        log.Print(MessageType::ERROR, "Lights not supported in console mode!");
         return nullptr;
     }
 
     const char* name = nullptr;
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Light name missing (namespace '%s')!", namePrefix.c_str());
         return nullptr;
+    }
 
     std::string lightName = std::string(name);
     if(namePrefix != "")
@@ -2770,17 +3336,25 @@ Light* ScenarioParser::ParseLight(XMLElement* element, const std::string& namePr
     
     if((item = element->FirstChildElement("specs")) != nullptr)
     {
-        if(item->QueryAttribute("illuminance", &illu) != XML_SUCCESS)
+        if((item->QueryAttribute("illuminance", &illu) != XML_SUCCESS)
+           || (item->QueryAttribute("radius", &radius) != XML_SUCCESS))
+        {
+            log.Print(MessageType::ERROR, "Specs of light '%s' not properly defined!", lightName.c_str());
             return nullptr;
-        if(item->QueryAttribute("radius", &radius) != XML_SUCCESS)
-            return nullptr;
+        }        
         item->QueryAttribute("cone_angle", &cone);
     } 
     else
+    {
+        log.Print(MessageType::ERROR, "Specs of light '%s' not defined!", lightName.c_str());
         return nullptr;
+    }
     
     if((item = element->FirstChildElement("color")) == nullptr || !ParseColor(item, color))
+    {
+        log.Print(MessageType::ERROR, "Color of light '%s' not properly defined!", lightName.c_str());
         return nullptr;
+    }
         
     Light* light;
     if(cone > Scalar(0))
@@ -2797,17 +3371,27 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
     unsigned int devId;
     
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Communication device name missing (namespace '%s')!", namePrefix.c_str());
         return nullptr;
-    if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
-        return nullptr;
-    if(element->QueryAttribute("device_id", &devId) != XML_SUCCESS)
-        return nullptr;
-     
-    std::string typeStr(type);
+    }
     std::string commName = std::string(name);
     if(namePrefix != "")
         commName = namePrefix + "/" + commName;
 
+    if(element->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Type of communication device '%s' missing!", commName.c_str());
+        return nullptr;
+    }
+    std::string typeStr(type);
+
+    if(element->QueryAttribute("device_id", &devId) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Id of communication device '%s' missing!", commName.c_str());
+        return nullptr;
+    }
+     
     XMLElement* item;
     Comm* comm;
     if(typeStr == "acoustic_modem")
@@ -2822,10 +3406,16 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
             || item->QueryAttribute("horizontal_fov", &hFovDeg) != XML_SUCCESS
             || item->QueryAttribute("vertical_fov", &vFovDeg) != XML_SUCCESS
             || item->QueryAttribute("range", &range) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of communication device '%s' not properly defined!", commName.c_str());
             return nullptr;
+        }
         item = element->FirstChildElement("connect");
         if(item == nullptr || item->QueryAttribute("device_id", &cId) != XML_SUCCESS || cId == 0)
+        {
+            log.Print(MessageType::ERROR, "Communication device '%s' not connected!", commName.c_str());
             return nullptr;
+        }
         item->QueryAttribute("occlusion_test", &occlusion);
     
         comm = new AcousticModem(commName, devId, hFovDeg, vFovDeg, range);
@@ -2846,10 +3436,16 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
             || item->QueryAttribute("horizontal_fov", &hFovDeg) != XML_SUCCESS
             || item->QueryAttribute("vertical_fov", &vFovDeg) != XML_SUCCESS
             || item->QueryAttribute("range", &range) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of communication device '%s' not properly defined!", commName.c_str());
             return nullptr;
+        }
         item = element->FirstChildElement("connect");
         if(item == nullptr || item->QueryAttribute("device_id", &cId) != XML_SUCCESS || cId == 0)
+        {
+            log.Print(MessageType::ERROR, "Communication device '%s' not connected!", commName.c_str());
             return nullptr;
+        }
         item->QueryAttribute("occlusion_test", &occlusion);
 
         comm = new USBLSimple(commName, devId, hFovDeg, vFovDeg, range);
@@ -2860,24 +3456,38 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
             && item->QueryAttribute("rate", &pingRate) == XML_SUCCESS)
             ((USBL*)comm)->EnableAutoPing(pingRate);
         
+        //Optional noise definitions
         if((item = element->FirstChildElement("noise")) != nullptr)
         {
             Scalar rangeDev = Scalar(0);
             Scalar hAngleDevDeg = Scalar(0);
             Scalar vAngleDevDeg = Scalar(0);
-            item->QueryAttribute("range", &rangeDev);
-            item->QueryAttribute("horizontal_angle", &hAngleDevDeg);
-            item->QueryAttribute("vertical_angle", &vAngleDevDeg);
-            ((USBLSimple*)comm)->setNoise(rangeDev, hAngleDevDeg, vAngleDevDeg);
+            int c = 0;
+            if(item->QueryAttribute("range", &rangeDev) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("horizontal_angle", &hAngleDevDeg) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("vertical_angle", &vAngleDevDeg) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of communication device '%s' not properly defined - using defaults.", commName.c_str());
+            else
+                ((USBLSimple*)comm)->setNoise(rangeDev, hAngleDevDeg, vAngleDevDeg);
         }
-
+        //Optional resolution definitions
         if((item = element->FirstChildElement("resolution")) != nullptr)
         {
             Scalar rangeRes = Scalar(0);
             Scalar angleResDeg = Scalar(0);
-            item->QueryAttribute("range", &rangeRes);
-            item->QueryAttribute("angle", &angleResDeg);
-            ((USBLSimple*)comm)->setResolution(rangeRes, angleResDeg);
+            int c = 0;
+            if(item->QueryAttribute("range", &rangeRes) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("angle", &angleResDeg) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Resolution of communication device '%s' not properly defined - using defaults.", commName.c_str());
+            else
+                ((USBLSimple*)comm)->setResolution(rangeRes, angleResDeg);
         }
         return comm;
     }
@@ -2898,10 +3508,16 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
             || item->QueryAttribute("range", &range) != XML_SUCCESS
             || item->QueryAttribute("frequency", &freq) != XML_SUCCESS
             || item->QueryAttribute("baseline", &baseline) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "Specs of communication device '%s' not properly defined!", commName.c_str());
             return nullptr;
+        }
         item = element->FirstChildElement("connect");
         if(item == nullptr || item->QueryAttribute("device_id", &cId) != XML_SUCCESS || cId == 0)
+        {
+            log.Print(MessageType::ERROR, "Communication device '%s' not connected!", commName.c_str());
             return nullptr;
+        }
         item->QueryAttribute("occlusion_test", &occlusion);
 
         comm = new USBLReal(commName, devId, hFovDeg, vFovDeg, range, freq, baseline);
@@ -2912,6 +3528,7 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
             && item->QueryAttribute("rate", &pingRate) == XML_SUCCESS)
             ((USBL*)comm)->EnableAutoPing(pingRate);
         
+        //Optional noise definitions
         if((item = element->FirstChildElement("noise")) != nullptr)
         {
             Scalar timeDev(0);
@@ -2919,18 +3536,27 @@ Comm* ScenarioParser::ParseComm(XMLElement* element, const std::string& namePref
             Scalar phaseDev(0);
             Scalar blError(0);
             Scalar depthDev(0);
-            item->QueryAttribute("tof", &timeDev);
-            item->QueryAttribute("sound_velocity", &svDev);
-            item->QueryAttribute("phase", &phaseDev);
-            item->QueryAttribute("baseline_error", &blError);
-            item->QueryAttribute("depth", &depthDev);
-            ((USBLReal*)comm)->setNoise(timeDev, svDev, phaseDev, blError, depthDev);
+            int c = 0;
+            if(item->QueryAttribute("tof", &timeDev) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("sound_velocity", &svDev) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("phase", &phaseDev) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("baseline_error", &blError) == XML_SUCCESS)
+                ++c;
+            if(item->QueryAttribute("depth", &depthDev) == XML_SUCCESS)
+                ++c;
+            if(c == 0)
+                log.Print(MessageType::WARNING, "Noise of communication device '%s' not properly defined - using defaults.", commName.c_str());
+            else
+                ((USBLReal*)comm)->setNoise(timeDev, svDev, phaseDev, blError, depthDev);
         }
         return comm;
     }
     else 
     {
-        cError("Scenario parser: unknown communication device type!");
+        log.Print(MessageType::ERROR, "Unknown type of communication device '%s'!", commName.c_str());
         return nullptr;
     }
 }
@@ -2939,13 +3565,20 @@ bool ScenarioParser::ParseContact(XMLElement* element)
 {
     const char* name = nullptr;
     if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+    {        
+        log.Print(MessageType::ERROR, "Name of contact missing!");
         return false;
+    }
+    std::string contactName(name);
         
     XMLElement* itemA;
     XMLElement* itemB;
     if((itemA = element->FirstChildElement("bodyA")) == nullptr
         || (itemB = element->FirstChildElement("bodyB")) == nullptr)
+    {
+        log.Print(MessageType::ERROR, "Body definitions for contact '%s' missing!", contactName.c_str());
         return false;
+    }
     
     const char* nameA = nullptr;
     const char* nameB = nullptr;
@@ -2953,7 +3586,10 @@ bool ScenarioParser::ParseContact(XMLElement* element)
     const char* dispB = nullptr;
     if(itemA->QueryStringAttribute("name", &nameA) != XML_SUCCESS
         || itemB->QueryStringAttribute("name", &nameB) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Body names for contact '%s' missing!", contactName.c_str());
         return false;
+    }
     
     Entity* entA;
     Entity* entB;
@@ -2984,7 +3620,10 @@ bool ScenarioParser::ParseContact(XMLElement* element)
     if(entA == nullptr || entB == nullptr
        || (entA->getType() != EntityType::SOLID && entA->getType() != EntityType::STATIC)
        || (entB->getType() != EntityType::SOLID && entB->getType() != EntityType::STATIC))
+    {
+        log.Print(MessageType::ERROR, "Bodies defined for contact '%s' not found!", contactName.c_str());
         return false;
+    }
     
     int16_t displayMask = 0;
     if(itemA->QueryStringAttribute("display", &dispA) == XML_SUCCESS)
@@ -3012,7 +3651,7 @@ bool ScenarioParser::ParseContact(XMLElement* element)
     if((itemA = element->FirstChildElement("history")) != nullptr)
         itemA->QueryAttribute("points", &history);
     
-    Contact* cnt = new Contact(name, entA, entB, history);
+    Contact* cnt = new Contact(contactName, entA, entB, history);
     cnt->setDisplayMask(displayMask);
     sm->AddContact(cnt);
     
@@ -3041,7 +3680,7 @@ bool ScenarioParser::CopyNode(XMLNode* destParent, const XMLNode* src)
     tinyxml2::XMLNode* srcCopy = src->ShallowClone(doc);
     if(srcCopy == nullptr)
     {
-        //Error handling required (e.g. throw)
+        log.Print(MessageType::ERROR, "Performing XML node copy failed!");
         return false;
     }
 
@@ -3055,11 +3694,11 @@ bool ScenarioParser::CopyNode(XMLNode* destParent, const XMLNode* src)
     return true;
 }
 
-
 bool ScenarioParser::ParseVector(const char* components, Vector3& v)
 {
     Scalar x, y, z;
-    if(sscanf(components, "%lf %lf %lf", &x, &y, &z) != 3) return false;
+    if(sscanf(components, "%lf %lf %lf", &x, &y, &z) != 3) 
+        return false;
     v.setX(x);
     v.setY(y);
     v.setZ(z);
@@ -3073,14 +3712,14 @@ bool ScenarioParser::ParseTransform(XMLElement* element, Transform& T)
     Vector3 xyz;
     Vector3 rpy;
     
-    if(element->QueryStringAttribute("xyz", &trans) != XML_SUCCESS)
+    if(element->QueryStringAttribute("xyz", &trans) != XML_SUCCESS
+       || element->QueryStringAttribute("rpy", &rot) != XML_SUCCESS
+       || !ParseVector(trans, xyz)
+       || !ParseVector(rot, rpy))
+    {
+        log.Print(MessageType::ERROR, "Unable to parse transform!");
         return false;
-    if(element->QueryStringAttribute("rpy", &rot) != XML_SUCCESS)
-        return false;
-    if(!ParseVector(trans, xyz))
-        return false;
-    if(!ParseVector(rot, rpy))
-        return false;
+    }
         
     T = Transform(Quaternion(rpy.z(), rpy.y(), rpy.x()), xyz);
     return true;
@@ -3100,7 +3739,10 @@ bool ScenarioParser::ParseColor(XMLElement* element, Color& c)
     else if(element->QueryAttribute("gray", &c1) == XML_SUCCESS)
         c = Color::Gray(c1);
     else
+    {
+        log.Print(MessageType::ERROR, "Unable to parse color definition!");
         return false;
+    }
         
     return true;
 }
@@ -3125,12 +3767,17 @@ bool ScenarioParser::ParseColorMap(XMLElement* element, ColorMap& cm)
         else if(colorMapStr == "orangecopper")
             cm = ColorMap::ORANGE_COPPER;
         else
+        {
+            log.Print(MessageType::ERROR, "Unknown color map name '%s'!", colorMapStr.c_str());
             return false;
-
+        }
         return true;
     }
-    else 
+    else
+    {
+        log.Print(MessageType::ERROR, "Color map definition not found!");
         return false;
+    }
 }
 
 bool ScenarioParser::isGraphicalSim()

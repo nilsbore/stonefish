@@ -20,7 +20,7 @@
 //  Stonefish
 //
 //  Created by Patryk Cieslak on 31/07/2018.
-//  Copyright (c) 2018-2019 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2018-2021 Patryk Cieslak. All rights reserved.
 //
 
 #include "sensors/scalar/Profiler.h"
@@ -39,8 +39,8 @@ Profiler::Profiler(std::string uniqueName, Scalar angleRangeDeg, unsigned int an
 {
     angRange = UnitSystem::Angle(true, angleRangeDeg);
     angSteps = angleSteps;
-    channels.push_back(SensorChannel("Angle", QUANTITY_ANGLE));
-    channels.push_back(SensorChannel("Distance", QUANTITY_LENGTH));
+    channels.push_back(SensorChannel("Angle", QuantityType::ANGLE));
+    channels.push_back(SensorChannel("Distance", QuantityType::LENGTH));
     channels[1].rangeMin = Scalar(0);
     channels[1].rangeMax = BT_LARGE_FLOAT;
     currentAngStep = 0;
@@ -118,13 +118,13 @@ std::vector<Renderable> Profiler::Render()
 
 void Profiler::setRange(Scalar rangeMin, Scalar rangeMax)
 {
-    channels[1].rangeMin = rangeMin;
-    channels[1].rangeMax = rangeMax;
+    channels[1].rangeMin = btClamped(rangeMin, Scalar(0), Scalar(BT_LARGE_FLOAT));
+    channels[1].rangeMax = btClamped(rangeMax, Scalar(0), Scalar(BT_LARGE_FLOAT));
 }
 
-void Profiler::setNoise(Scalar stdDev)
+void Profiler::setNoise(Scalar rangeStdDev)
 {
-    channels[1].setStdDev(stdDev);
+    channels[1].setStdDev(btClamped(rangeStdDev, Scalar(0), Scalar(BT_LARGE_FLOAT)));
 }
 
 ScalarSensorType Profiler::getScalarSensorType()

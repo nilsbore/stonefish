@@ -20,7 +20,7 @@
 //  Stonefish
 //
 //  Created by Patryk Cieslak on 02/11/2017.
-//  Copyright (c) 2017-2018 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2017-2021 Patryk Cieslak. All rights reserved.
 //
 
 #include "sensors/scalar/Compass.h"
@@ -32,7 +32,7 @@ namespace sf
 
 Compass::Compass(std::string uniqueName, Scalar frequency, int historyLength) : LinkSensor(uniqueName, frequency, historyLength)
 {
-    channels.push_back(SensorChannel("Heading", QUANTITY_ANGLE));
+    channels.push_back(SensorChannel("Heading", QuantityType::ANGLE));
 }
 
 void Compass::InternalUpdate(Scalar dt)
@@ -48,7 +48,7 @@ void Compass::InternalUpdate(Scalar dt)
 
 void Compass::setNoise(Scalar headingStdDev)
 {
-    channels[0].setStdDev(headingStdDev);
+    channels[0].setStdDev(btClamped(headingStdDev, Scalar(0), Scalar(BT_LARGE_FLOAT)));
 }
 
 ScalarSensorType Compass::getScalarSensorType()
